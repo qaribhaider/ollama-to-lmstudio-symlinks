@@ -10,6 +10,9 @@ import (
 	"strings"
 )
 
+// Version of the application
+var Version = "dev"
+
 // OllamaManifest represents the structure of an Ollama model manifest
 type OllamaManifest struct {
 	SchemaVersion int    `json:"schemaVersion"`
@@ -39,7 +42,13 @@ func main() {
 	var lmstudioDir = flag.String("lmstudio-dir", getDefaultLMStudioDir(), "Path to LM Studio models directory")
 	var dryRun = flag.Bool("dry-run", false, "Show what would be done without actually creating symlinks")
 	var verbose = flag.Bool("verbose", false, "Enable verbose output")
+	var showVersion = flag.Bool("version", false, "Show version information")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("ollama-symlinks version %s\n", Version)
+		os.Exit(0)
+	}
 
 	fmt.Printf("🔍 Scanning Ollama models in: %s\n", *ollamaDir)
 	fmt.Printf("🎯 Target LM Studio directory: %s\n", *lmstudioDir)

@@ -1,0 +1,107 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        arch: [amd64, arm64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.21"
+
+      - name: Build for Linux
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          VERSION=$(cat VERSION)
+          GOOS=linux GOARCH=${{ matrix.arch }} go build -ldflags="-X 'main.Version=$VERSION'" -o ollama-symlinks-linux-${{ matrix.arch }} ollama-symlinks.go
+          echo "ollama-symlinks-linux-${{ matrix.arch }}=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Build for macOS
+        if: matrix.os == 'macos-latest'
+        run: |
+          VERSION=$(cat VERSION)
+          GOOS=darwin GOARCH=${{ matrix.arch }} go build -ldflags="-X 'main.Version=$VERSION'" -o ollama-symlinks-macos-${{ matrix.arch }} ollama-symlinks.go
+          echo "ollama-symlinks-macos-${{ matrix.arch }}=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Build for Windows
+        if: matrix.os == 'windows-latest'
+        run: |
+          VERSION=$(cat VERSION)
+          GOOS=windows GOARCH=${{ matrix.arch }} go build -ldflags="-X 'main.Version=$VERSION'" -o ollama-symlinks-windows-${{ matrix.arch }}.exe ollama-symlinks.go
+          echo "ollama-symlinks-windows-${{ matrix.arch }}=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: binaries-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            ollama-symlinks-*
+          retention-days: 90
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v$(cat VERSION)
+          name: Release v$(cat VERSION)
+          body: |
+            Release of ollama-symlinks version $(cat VERSION)
+
+            ## Installation
+
+            ### Linux
+            ```bash
+            curl -L -o ollama-symlinks https://github.com/${{ github.repository }}/releases/download/v$(cat VERSION)/ollama-symlinks-linux-amd64
+            chmod +x ollama-symlinks
+            sudo mv ollama-symlinks /usr/local/bin/
+            ```
+
+            ### macOS
+            ```bash
+            curl -L -o ollama-symlinks https://github.com/${{ github.repository }}/releases/download/v$(cat VERSION)/ollama-symlinks-macos-amd64
+            chmod +x ollama-symlinks
+            sudo mv ollama-symlinks /usr/local/bin/
+            ```
+
+            ### Windows
+            Download the appropriate `.exe` file for your architecture from the releases page.
+
+            ## Usage
+            ```bash
+            ollama-symlinks --help
+            ollama-symlinks --version
+            ```
+          files: |
+            binaries-ubuntu-latest-amd64/ollama-symlinks-linux-amd64
+            binaries-ubuntu-latest-arm64/ollama-symlinks-linux-arm64
+            binaries-macos-latest-amd64/ollama-symlinks-macos-amd64
+            binaries-macos-latest-arm64/ollama-symlinks-macos-arm64
+            binaries-windows-latest-amd64/ollama-symlinks-windows-amd64.exe
+            binaries-windows-latest-arm64/ollama-symlinks-windows-arm64.exe
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

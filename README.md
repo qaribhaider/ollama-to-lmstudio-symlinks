@@ -73,11 +73,60 @@ Flags:
 
 ## 🚀 Fancy some changes?
 
-### Update code and Build the Binary
+### Build from Source
+
+#### Using Make (Recommended)
 
 ```bash
-go build -o ollama-symlinks ollama-symlinks.go
+# Build the binary
+make build
+
+# Clean built files
+make clean
+
+# Run tests
+make test
+
+# Show version
+make version
+
+# Install to /usr/local/bin
+make install
 ```
+
+#### Using the Build Script
+
+```bash
+# Build the binary
+./build.sh
+
+# Clean built files
+rm -f ollama-symlinks
+```
+
+#### Using Go Directly
+
+```bash
+# Build the binary
+go build -ldflags="-X 'main.Version=$(cat VERSION)'" -o ollama-symlinks ollama-symlinks.go
+
+# Run the binary
+./ollama-symlinks
+```
+
+### Version Management
+
+The version is stored in the `VERSION` file. To update the version:
+
+```bash
+# Using Make (recommended)
+make update-version
+
+# Or manually
+echo "v0.2.0" > VERSION
+```
+
+After updating the version, commit the changes and push to trigger a new release.
 
 ## 🔧 How It Works
 
