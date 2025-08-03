@@ -75,8 +75,8 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.VERSION }}
-          name: Release v${{ steps.version.outputs.VERSION }}
+          tag_name: ${{ steps.version.outputs.VERSION }}
+          name: Release ${{ steps.version.outputs.VERSION }}
           body: |
             Release of ollama-symlinks version ${{ steps.version.outputs.VERSION }}
 
@@ -84,14 +84,14 @@ jobs:
 
             ### Linux
             ```bash
-            curl -L -o ollama-symlinks https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.VERSION }}/ollama-symlinks-linux-amd64
+            curl -L -o ollama-symlinks https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.VERSION }}/ollama-symlinks-linux-amd64
             chmod +x ollama-symlinks
             sudo mv ollama-symlinks /usr/local/bin/
             ```
 
             ### macOS
             ```bash
-            curl -L -o ollama-symlinks https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.VERSION }}/ollama-symlinks-macos-amd64
+            curl -L -o ollama-symlinks https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.VERSION }}/ollama-symlinks-macos-amd64
             chmod +x ollama-symlinks
             sudo mv ollama-symlinks /usr/local/bin/
             ```
