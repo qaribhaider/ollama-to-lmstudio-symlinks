@@ -68,26 +68,30 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
 
+      - name: Read VERSION file
+        id: version
+        run: echo "VERSION=$(cat VERSION)" >> $GITHUB_OUTPUT
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v$(cat VERSION)
-          name: Release v$(cat VERSION)
+          tag_name: v${{ steps.version.outputs.VERSION }}
+          name: Release v${{ steps.version.outputs.VERSION }}
           body: |
-            Release of ollama-symlinks version $(cat VERSION)
+            Release of ollama-symlinks version ${{ steps.version.outputs.VERSION }}
 
             ## Installation
 
             ### Linux
             ```bash
-            curl -L -o ollama-symlinks https://github.com/${{ github.repository }}/releases/download/v$(cat VERSION)/ollama-symlinks-linux-amd64
+            curl -L -o ollama-symlinks https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.VERSION }}/ollama-symlinks-linux-amd64
             chmod +x ollama-symlinks
             sudo mv ollama-symlinks /usr/local/bin/
             ```
 
             ### macOS
             ```bash
-            curl -L -o ollama-symlinks https://github.com/${{ github.repository }}/releases/download/v$(cat VERSION)/ollama-symlinks-macos-amd64
+            curl -L -o ollama-symlinks https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.VERSION }}/ollama-symlinks-macos-amd64
             chmod +x ollama-symlinks
             sudo mv ollama-symlinks /usr/local/bin/
             ```
