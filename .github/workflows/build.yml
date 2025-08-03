@@ -39,6 +39,7 @@ jobs:
         run: |
           VERSION=$(cat VERSION)
           GOOS=darwin GOARCH=${{ matrix.arch }} go build -ldflags="-X 'main.Version=$VERSION'" -o ollama-symlinks-macos-${{ matrix.arch }} ollama-symlinks.go
+          codesign --force --deep --sign - ollama-symlinks-macos-${{ matrix.arch }}
           echo "ollama-symlinks-macos-${{ matrix.arch }}=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Build for Windows
@@ -67,6 +68,11 @@ jobs:
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
+
+      - name: Generate checksums
+        run: |
+          find . -name "ollama-symlinks-*" -type f -exec sha256sum {} \; > checksums.txt
+          cat checksums.txt
 
       - name: Read VERSION file
         id: version
