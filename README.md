@@ -204,4 +204,4 @@ Feel free to submit issues or pull requests to improve this tool!
 
 ## 📄 License
 
-This project is open source. Use it freely!
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
