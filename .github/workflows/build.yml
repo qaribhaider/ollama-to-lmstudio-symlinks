@@ -22,7 +22,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: "1.21"
+          go-version: "1.23"
 
       - name: Build for Linux
         if: matrix.os == 'ubuntu-latest'
@@ -41,9 +41,10 @@ jobs:
       - name: Build for Windows
         if: matrix.os == 'windows-latest'
         run: |
-          VERSION=$(cat VERSION)
-          GOOS=windows GOARCH=${{ matrix.arch }} go build -ldflags="-X 'main.Version=$VERSION'" -o ollama-symlinks-windows-${{ matrix.arch }}.exe ollama-symlinks.go
-          echo "ollama-symlinks-windows-${{ matrix.arch }}=$VERSION" >> $GITHUB_OUTPUT
+          $version = Get-Content -Path VERSION
+          $env:VERSION = $version
+          go build -ldflags="-X 'main.Version=$env:VERSION'" -o ollama-symlinks-windows-${{ matrix.arch }}.exe ollama-symlinks.go
+          echo "ollama-symlinks-windows-${{ matrix.arch }}=$env:VERSION" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
