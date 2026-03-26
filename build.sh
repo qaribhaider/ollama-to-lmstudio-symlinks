@@ -11,6 +11,6 @@ echo "Building version: $VERSION"
 
 # Build the binary
 echo "Building binary..."
-go build -ldflags="-X 'main.Version=$VERSION'" -o ollama-symlinks ollama-symlinks.go
+go build -ldflags="-X 'main.Version=$VERSION'" -o ollama-symlinks ./cmd/ollama-symlinks
 
 echo "Build complete: ollama-symlinks version $VERSION"
