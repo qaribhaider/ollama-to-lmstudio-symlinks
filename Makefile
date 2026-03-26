@@ -18,7 +18,7 @@ clean:
 # Run tests
 test:
 	@echo "Running tests..."
-	@go test -v ./...
+	@go test -v ollama-symlinks.go ollama-symlinks_test.go
 
 # Show version
 version:

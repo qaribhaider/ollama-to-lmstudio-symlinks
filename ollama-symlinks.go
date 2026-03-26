@@ -144,7 +144,7 @@ func discoverModels(ollamaDir string, verbose bool) ([]ModelInfo, error) {
 
 		// Extract model name from path
 		// Path format: .../manifests/registry.ollama.ai/library/model_name/variant
-		relativePath := strings.TrimPrefix(path, manifestsDir)
+		relativePath := filepath.ToSlash(strings.TrimPrefix(path, manifestsDir))
 		pathParts := strings.Split(strings.Trim(relativePath, "/"), "/")
 
 		if len(pathParts) < 3 {
