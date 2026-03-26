@@ -1,6 +1,6 @@
-# Ollama-LMStudio Symlinks
+# Ollama-LMStudio Symlink Utility
 
-A Go utility to create symbolic links from Ollama models to LM Studio, allowing you to use your Ollama models in LM Studio without duplicating storage space.
+A modular Go utility to create symbolic links between Ollama and LM Studio, allowing you to share model files bidirectional without duplicating storage space.
 
 ## 🎯 Purpose
 
@@ -8,12 +8,13 @@ If you have models downloaded in Ollama and want to use them in LM Studio, you t
 
 ## ✨ Features
 
-- **🔍 Dynamic Discovery**: Automatically scans and discovers all Ollama models
-- **⚙️ Configurable Paths**: Customize Ollama and LM Studio directories via command-line flags
-- **🛡️ Safe Operations**: Never overwrites existing symlinks
+- **🔄 Bidirectional Sync**: Link Ollama models to LM Studio OR LM Studio models to Ollama
+- **🔍 Dynamic Discovery**: Automatically scans and discovers models in both applications
+- **🧹 Interactive Cleanup**: Safely remove symlinks through the interactive `delete` command
+- **⚙️ Configurable Paths**: Customize directories via command-line flags
+- **🛡️ Safe Operations**: Never overwrites existing files; ignores existing symlinks to avoid circular loops
 - **📊 Clear Status**: Shows what was created vs. skipped
 - **🧪 Dry Run**: Preview changes without making them
-- **📝 Verbose Mode**: Detailed logging for troubleshooting
 - **🎯 Multi-component Support**: Handles complex models (e.g., LLaVA with projector files)
 
 ## 🚀 Quick Start
@@ -29,21 +30,25 @@ This will:
 - Scan `~/.ollama/models` for Ollama models
 - Create symlinks in `~/.cache/lm-studio/models/ollama/`
 
-⚠️ **Important**: Do not delete the added models through LM Studio UI, else they do not show up (if symlinked again). As of now, rather go the lm studio models directory and just delete the folder of the model you want.
+⚠️ **Important**: Do not delete symlinked models through the LM Studio UI, as it may cause issues if you try to symlink them again. Instead, use the built-in cleanup tool: `ollama-symlinks delete --from lmstudio`.
 
 ## 📖 Usage
 
 ### Basic Usage
 
 ```bash
-# Run with default directories
+# Link Ollama models -> LM Studio (Forward)
 ./ollama-symlinks
 
-# Dry run to see what would happen (recommended first run)
-./ollama-symlinks -dry-run
+# Link LM Studio models -> Ollama (Reverse)
+./ollama-symlinks --reverse --name-prefix="lms"
 
-# Enable verbose output
-./ollama-symlinks -verbose
+# Interactively delete symlinks
+./ollama-symlinks delete --from lmstudio
+./ollama-symlinks delete --from ollama
+
+# Dry run to see what would happen
+./ollama-symlinks -dry-run
 ```
 
 ### Custom Directories
@@ -67,8 +72,12 @@ This will:
 Flags:
   -ollama-dir string     Path to Ollama models directory (default "~/.ollama/models")
   -lmstudio-dir string   Path to LM Studio models directory (default "~/.cache/lm-studio/models")
+  -reverse              Link LM Studio models to Ollama (Reverse mode)
+  -name-prefix string    Prefix for models created in Ollama (default "lms")
+  -delete               (Subcommand) List and remove existing symlinks interactively
   -dry-run              Show what would be done without making changes
   -verbose              Enable verbose output
+  -version              Show version information
 ```
 
 ## 🚀 Fancy some changes?
@@ -108,7 +117,7 @@ rm -f ollama-symlinks
 
 ```bash
 # Build the binary
-go build -ldflags="-X 'main.Version=$(cat VERSION)'" -o ollama-symlinks ollama-symlinks.go
+go build -o ollama-symlinks ./cmd/ollama-symlinks
 
 # Run the binary
 ./ollama-symlinks
@@ -162,7 +171,7 @@ After updating the version, commit the changes and push to trigger a new release
 
 ### To Build
 
-- Go 1.16+ (uses only standard library)
+- Go 1.26.1+ (Modular Go project)
 
 ### To Run
 
@@ -177,7 +186,7 @@ After updating the version, commit the changes and push to trigger a new release
 - **Cross-Platform**: Works on macOS, Linux, and Windows (Windows requires appropriate permissions for symlinks)
 - **Safe Operation**: Never overwrites existing files or symlinks
 - **Storage Savings**: Can save 10-50GB+ depending on your model collection
-- **Deletion in Lm Studio**: Do not delete the added models through LM Studio UI, else they do not show up again (if symlinked). As of now, rather go the lm studio models directory and just delete the folder of the model you want.
+- **Deletion in LM Studio**: Do not delete symlinked models through the LM Studio UI. Instead, use the built-in cleanup tool: `ollama-symlinks delete --from lmstudio`.
 
 ## 🔍 Troubleshooting
 
