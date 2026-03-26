@@ -13,6 +13,13 @@ import (
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/models"
 )
 
+// SymlinkInfo holds metadata about a discovered symbolic link
+type SymlinkInfo struct {
+	Name   string
+	Path   string
+	Target string
+}
+
 func CalculateSHA256(filePath string) (string, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -187,4 +194,55 @@ func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix stri
 	}
 
 	return true
+}
+
+func ListSymlinks(dir string) ([]SymlinkInfo, error) {
+	var symlinks []SymlinkInfo
+
+	// Check if directory exists
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return nil, nil // Return empty if dir doesn't exist
+	}
+
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Only look for symbolic links
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(path)
+			if err != nil {
+				return nil // Skip if we can't read it
+			}
+
+			symlinks = append(symlinks, SymlinkInfo{
+				Name:   info.Name(),
+				Path:   path,
+				Target: target,
+			})
+		}
+		return nil
+	})
+
+	return symlinks, err
+}
+
+func RemoveSymlinks(paths []string, dryRun bool) (int, int) {
+	var removed, failed int
+	for _, path := range paths {
+		if dryRun {
+			fmt.Printf("  Would remove: %s\n", path)
+			removed++
+			continue
+		}
+
+		if err := os.Remove(path); err != nil {
+			fmt.Printf("❌ ERROR: Could not remove %s: %v\n", path, err)
+			failed++
+		} else {
+			removed++
+		}
+	}
+	return removed, failed
 }

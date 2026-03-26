@@ -112,3 +112,73 @@ func TestProcessLMStudioModelDryRun(t *testing.T) {
 		}
 	}
 }
+
+func TestListSymlinks(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Create a real file
+	realFile := filepath.Join(tempDir, "real.txt")
+	os.WriteFile(realFile, []byte("data"), 0644)
+
+	// Create a symlink
+	linkPath := filepath.Join(tempDir, "link.txt")
+	os.Symlink(realFile, linkPath)
+
+	// Create a subdirectory with another symlink
+	subDir := filepath.Join(tempDir, "sub")
+	os.Mkdir(subDir, 0755)
+	subLinkPath := filepath.Join(subDir, "sublink.txt")
+	os.Symlink(realFile, subLinkPath)
+
+	links, err := ListSymlinks(tempDir)
+	if err != nil {
+		t.Fatalf("ListSymlinks failed: %v", err)
+	}
+
+	// Should find 2 symlinks
+	if len(links) != 2 {
+		t.Fatalf("Expected 2 symlinks, got %d", len(links))
+	}
+
+	// Verify names
+	names := map[string]bool{}
+	for _, l := range links {
+		names[l.Name] = true
+	}
+	if !names["link.txt"] || !names["sublink.txt"] {
+		t.Errorf("Did not find expected symlink names: %v", names)
+	}
+}
+
+func TestRemoveSymlinks(t *testing.T) {
+	tempDir := t.TempDir()
+	
+	// Create real file and symlink
+	realFile := filepath.Join(tempDir, "real.txt")
+	os.WriteFile(realFile, []byte("data"), 0644)
+	linkPath := filepath.Join(tempDir, "link.txt")
+	os.Symlink(realFile, linkPath)
+
+	// Test dry run
+	removed, failed := RemoveSymlinks([]string{linkPath}, true)
+	if removed != 1 || failed != 0 {
+		t.Errorf("Dry run: expected 1 removed, 0 failed, got %d/%d", removed, failed)
+	}
+	if _, err := os.Lstat(linkPath); os.IsNotExist(err) {
+		t.Error("Dry run should not have removed the file")
+	}
+
+	// Test actual removal
+	removed, failed = RemoveSymlinks([]string{linkPath}, false)
+	if removed != 1 || failed != 0 {
+		t.Errorf("Actual: expected 1 removed, 0 failed, got %d/%d", removed, failed)
+	}
+	if _, err := os.Lstat(linkPath); !os.IsNotExist(err) {
+		t.Error("Actual removal failed to delete the symlink")
+	}
+	
+	// Verify real file still exists
+	if _, err := os.Stat(realFile); os.IsNotExist(err) {
+		t.Error("Real file was accidentally deleted!")
+	}
+}
