@@ -6,7 +6,7 @@ all: build
 # Build the binary
 build:
 	@echo "Building ollama-symlinks..."
-	@./build.sh
+	@go build -o ollama-symlinks ./cmd/ollama-symlinks
 
 # Clean built files
 clean:
@@ -18,7 +18,7 @@ clean:
 # Run tests
 test:
 	@echo "Running tests..."
-	@go test -v ollama-symlinks.go ollama-symlinks_test.go
+	@go test -v ./...
 
 # Show version
 version:
