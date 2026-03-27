@@ -7,6 +7,7 @@ import (
 )
 
 func TestGetDefaultDirs(t *testing.T) {
+	// Test default behavior
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatalf("Failed to get user home dir: %v", err)
@@ -16,6 +17,16 @@ func TestGetDefaultDirs(t *testing.T) {
 	expectedLMStudio := filepath.Join(home, ".cache", "lm-studio", "models")
 	if lmStudioDir != expectedLMStudio {
 		t.Errorf("Expected LM Studio dir %s, got %s", expectedLMStudio, lmStudioDir)
+	}
+
+	// Test LMSTUDIO_MODELS env var
+	customPath := "/tmp/custom/lm-studio/models"
+	os.Setenv("LMSTUDIO_MODELS", customPath)
+	defer os.Unsetenv("LMSTUDIO_MODELS")
+
+	lmStudioDir = GetDefaultLMStudioDir()
+	if lmStudioDir != customPath {
+		t.Errorf("Expected custom LM Studio dir %s, got %s", customPath, lmStudioDir)
 	}
 }
 

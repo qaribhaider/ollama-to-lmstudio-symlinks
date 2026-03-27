@@ -10,6 +10,9 @@ import (
 )
 
 func GetDefaultLMStudioDir() string {
+	if env := os.Getenv("LMSTUDIO_MODELS"); env != "" {
+		return filepath.Clean(env)
+	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".cache", "lm-studio", "models")
 }

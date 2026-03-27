@@ -10,6 +10,7 @@ import (
 )
 
 func TestGetDefaultDirs(t *testing.T) {
+	// Test default behavior
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatalf("Failed to get user home dir: %v", err)
@@ -19,6 +20,16 @@ func TestGetDefaultDirs(t *testing.T) {
 	expectedOllama := filepath.Join(home, ".ollama", "models")
 	if ollamaDir != expectedOllama {
 		t.Errorf("Expected ollama dir %s, got %s", expectedOllama, ollamaDir)
+	}
+
+	// Test OLLAMA_MODELS env var
+	customPath := "/tmp/custom/ollama/models"
+	os.Setenv("OLLAMA_MODELS", customPath)
+	defer os.Unsetenv("OLLAMA_MODELS")
+
+	ollamaDir = GetDefaultOllamaDir()
+	if ollamaDir != customPath {
+		t.Errorf("Expected custom ollama dir %s, got %s", customPath, ollamaDir)
 	}
 }
 

@@ -11,6 +11,9 @@ import (
 )
 
 func GetDefaultOllamaDir() string {
+	if env := os.Getenv("OLLAMA_MODELS"); env != "" {
+		return filepath.Clean(env)
+	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".ollama", "models")
 }
