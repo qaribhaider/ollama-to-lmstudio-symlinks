@@ -320,3 +320,41 @@ func RemoveSymlinks(paths []string, dryRun bool) (int, int) {
 	}
 	return removed, failed
 }
+
+// FindBrokenSymlinks recursively finds all symbolic links in dir
+// whose targets do not exist.
+func FindBrokenSymlinks(dir string) ([]SymlinkInfo, error) {
+	var broken []SymlinkInfo
+
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return nil, nil
+	}
+
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Check if it's a symlink
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(path)
+			if err != nil {
+				return nil // Skip if unreadable
+			}
+
+			// Check if target exists
+			// We use os.Stat(path) - if it returns IsNotExist, then the target of the symlink is missing.
+			_, err = os.Stat(path)
+			if os.IsNotExist(err) {
+				broken = append(broken, SymlinkInfo{
+					Name:   info.Name(),
+					Path:   path,
+					Target: target,
+				})
+			}
+		}
+		return nil
+	})
+
+	return broken, err
+}

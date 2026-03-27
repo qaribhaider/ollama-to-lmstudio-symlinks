@@ -111,6 +111,10 @@ func runApp(args []string, stdin io.Reader) error {
 		return runDelete(*from, *ollamaDir, *lmstudioDir, *skipProvider, *deleteDryRun, *deleteVerbose, stdin)
 	}
 
+	if len(remainingArgs) > 0 && remainingArgs[0] == "cleanup" {
+		return runCleanup(*lmstudioDir, *dryRun, *verbose, stdin)
+	}
+
 	// Path resolution with candidates
 	if *ollamaDir == ollama.GetDefaultOllamaDir() {
 		candidates := ollama.GetOllamaCandidates()
@@ -455,4 +459,76 @@ func runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider string, dryRun,
 	if created > 0 && !dryRun {
 		fmt.Printf("🎉 Models are now available in Ollama with the '%s-' prefix\n", namePrefix)
 	}
+}
+
+func runCleanup(lmstudioDir string, dryRun, verbose bool, stdin io.Reader) error {
+	targetDir := filepath.Join(lmstudioDir, "ollama")
+	
+	// Check if target dir exists
+	if _, err := os.Stat(targetDir); os.IsNotExist(err) {
+		fmt.Printf("✅ No managed 'ollama' directory found in LM Studio. Nothing to clean.\n")
+		return nil
+	}
+
+	fmt.Printf("🔍 Scanning for broken symlinks in: %s\n", targetDir)
+	brokenLinks, err := linking.FindBrokenSymlinks(targetDir)
+	if err != nil {
+		return fmt.Errorf("could not search for broken symlinks: %w", err)
+	}
+
+	if len(brokenLinks) == 0 {
+		fmt.Printf("✅ No broken symbolic links found.\n")
+		return nil
+	}
+
+	fmt.Printf("📦 Found %d broken symbolic links (targets are missing):\n", len(brokenLinks))
+	for i, link := range brokenLinks {
+		fmt.Printf("  %d) %s -> %s\n", i+1, link.Path, link.Target)
+	}
+	fmt.Println()
+
+	if dryRun {
+		fmt.Println("🧪 DRY RUN MODE - No items will be removed.")
+		return nil
+	}
+
+	fmt.Printf("⚠️  Are you sure you want to delete these %d broken symlinks? (y/n): ", len(brokenLinks))
+	var confirm string
+	fmt.Fscanln(stdin, &confirm)
+	if strings.ToLower(confirm) != "y" {
+		fmt.Println("👋 Cancelled")
+		return nil
+	}
+
+	var paths []string
+	for _, link := range brokenLinks {
+		paths = append(paths, link.Path)
+	}
+
+	removed, failed := linking.RemoveSymlinks(paths, false)
+	fmt.Printf("\n✅ Summary: %d removed, %d failed\n", removed, failed)
+	
+	// Try to remove empty directories
+	if removed > 0 {
+		if verbose {
+			fmt.Println("📂 Cleaning up empty model directories...")
+		}
+		entries, err := os.ReadDir(targetDir)
+		if err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() {
+					dirPath := filepath.Join(targetDir, entry.Name())
+					// Only remove if empty
+					if files, err := os.ReadDir(dirPath); err == nil && len(files) == 0 {
+						os.Remove(dirPath)
+						if verbose {
+							fmt.Printf("  🗑️  Removed empty directory: %s\n", entry.Name())
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return nil
 }
