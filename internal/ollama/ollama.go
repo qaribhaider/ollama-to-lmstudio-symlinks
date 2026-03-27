@@ -144,3 +144,52 @@ func DiscoverModels(ollamaDir string, verbose bool) ([]models.ModelInfo, error) 
 
 	return discoveredModels, err
 }
+
+func ScanAllDrives() []string {
+	if os.Getenv("OS") != "Windows_NT" && os.PathSeparator != '\\' {
+		return nil
+	}
+
+	var found []string
+	// Common relative paths on Windows
+	relPaths := []string{
+		filepath.Join(".ollama", "models"),
+		filepath.Join("AppData", "Local", "Programs", "Ollama", "models"),
+		filepath.Join("AppData", "Local", "Ollama", "models"),
+	}
+
+	for _, driveLetter := range "ABCDEFGHIJKLMNOPQRSTUVWXYZ" {
+		drive := string(driveLetter) + ":\\"
+		// Use os.Stat to check if drive root is accessible
+		if _, err := os.Stat(drive); err != nil {
+			continue
+		}
+
+		// Check drive root (some users put models there)
+		if info, err := os.Stat(filepath.Join(drive, "ollama", "models")); err == nil && info.IsDir() {
+			found = append(found, filepath.Join(drive, "ollama", "models"))
+		}
+
+		// Check user profiles on this drive
+		usersDir := filepath.Join(drive, "Users")
+		entries, err := os.ReadDir(usersDir)
+		if err != nil {
+			continue
+		}
+
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			userProfile := filepath.Join(usersDir, entry.Name())
+			for _, rel := range relPaths {
+				target := filepath.Join(userProfile, rel)
+				if info, err := os.Stat(target); err == nil && info.IsDir() {
+					found = append(found, target)
+				}
+			}
+		}
+	}
+
+	return found
+}

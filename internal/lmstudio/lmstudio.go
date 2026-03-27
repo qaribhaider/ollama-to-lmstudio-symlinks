@@ -131,3 +131,49 @@ func DiscoverLMStudioModels(lmstudioDir, skipProvider string, verbose bool) ([]m
 
 	return discoveredModels, err
 }
+
+func ScanAllDrives() []string {
+	if os.Getenv("OS") != "Windows_NT" && os.PathSeparator != '\\' {
+		return nil
+	}
+
+	var found []string
+	// Common relative paths on Windows
+	relPaths := []string{
+		filepath.Join(".cache", "lm-studio", "models"),
+		filepath.Join(".lmstudio", "models"),
+		filepath.Join("AppData", "Local", "LMStudio", "models"),
+		filepath.Join("AppData", "Local", "lm-studio", "models"),
+		filepath.Join("AppData", "Roaming", "LM Studio", "models"),
+	}
+
+	for _, driveLetter := range "ABCDEFGHIJKLMNOPQRSTUVWXYZ" {
+		drive := string(driveLetter) + ":\\"
+		// Use os.Stat to check if drive root is accessible
+		if _, err := os.Stat(drive); err != nil {
+			continue
+		}
+
+		// Check user profiles on this drive
+		usersDir := filepath.Join(drive, "Users")
+		entries, err := os.ReadDir(usersDir)
+		if err != nil {
+			continue
+		}
+
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			userProfile := filepath.Join(usersDir, entry.Name())
+			for _, rel := range relPaths {
+				target := filepath.Join(userProfile, rel)
+				if info, err := os.Stat(target); err == nil && info.IsDir() {
+					found = append(found, target)
+				}
+			}
+		}
+	}
+
+	return found
+}

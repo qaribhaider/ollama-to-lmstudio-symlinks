@@ -53,6 +53,7 @@ func runApp(args []string, stdin io.Reader) error {
 	var lmstudioDir = fs.String("lmstudio-dir", lmstudio.GetDefaultLMStudioDir(), "Path to LM Studio models directory")
 	var dryRun = fs.Bool("dry-run", false, "Show what would be done without actually creating symlinks")
 	var verbose = fs.Bool("verbose", false, "Enable verbose output")
+	var deepScan = fs.Bool("deep-scan", false, "Scan all Windows drives for model directories (fallback)")
 	var showVersion = fs.Bool("version", false, "Show version information")
 
 	// Reverse mode flags
@@ -110,16 +111,57 @@ func runApp(args []string, stdin io.Reader) error {
 		return runDelete(*from, *ollamaDir, *lmstudioDir, *skipProvider, *deleteDryRun, *deleteVerbose, stdin)
 	}
 
+	// Path resolution with candidates
+	if *ollamaDir == ollama.GetDefaultOllamaDir() {
+		candidates := ollama.GetOllamaCandidates()
+		if *deepScan && len(candidates) == 0 {
+			if *verbose {
+				fmt.Println("🔎 Scaling all Windows drives for Ollama models...")
+			}
+			candidates = ollama.ScanAllDrives()
+		}
+		if len(candidates) > 1 {
+			fmt.Printf("📂 Found multiple Ollama model directories:\n")
+			for i, c := range candidates {
+				fmt.Printf("  [%d] %s\n", i+1, c)
+			}
+			fmt.Printf("Using the first one. Use --ollama-dir to override.\n\n")
+		}
+		if len(candidates) > 0 {
+			*ollamaDir = candidates[0]
+		}
+	}
+
+	if *lmstudioDir == lmstudio.GetDefaultLMStudioDir() {
+		candidates := lmstudio.GetLMStudioCandidates()
+		if *deepScan && len(candidates) == 0 {
+			if *verbose {
+				fmt.Println("🔎 Scaling all Windows drives for LM Studio models...")
+			}
+			candidates = lmstudio.ScanAllDrives()
+		}
+		if len(candidates) > 1 {
+			fmt.Printf("📂 Found multiple LM Studio model directories:\n")
+			for i, c := range candidates {
+				fmt.Printf("  [%d] %s\n", i+1, c)
+			}
+			fmt.Printf("Using the first one. Use --lmstudio-dir to override.\n\n")
+		}
+		if len(candidates) > 0 {
+			*lmstudioDir = candidates[0]
+		}
+	}
+
 	if *reverse {
 		// Check LM Studio dir exists
 		if _, err := os.Stat(*lmstudioDir); os.IsNotExist(err) {
-			return fmt.Errorf("LM Studio directory does not exist: %s", *lmstudioDir)
+			return fmt.Errorf("LM Studio directory does not exist: %s. Use --lmstudio-dir or --deep-scan to help find it.", *lmstudioDir)
 		}
 		runReverse(*lmstudioDir, *ollamaDir, *namePrefix, *skipProvider, *dryRun, *verbose)
 	} else {
 		// Check Ollama dir exists
 		if _, err := os.Stat(*ollamaDir); os.IsNotExist(err) {
-			return fmt.Errorf("Ollama directory does not exist: %s", *ollamaDir)
+			return fmt.Errorf("Ollama directory does not exist: %s. Use --ollama-dir or --deep-scan to help find it.", *ollamaDir)
 		}
 		runForward(*ollamaDir, *lmstudioDir, *dryRun, *verbose)
 	}
