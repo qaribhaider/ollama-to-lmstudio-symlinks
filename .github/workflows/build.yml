@@ -90,26 +90,17 @@ jobs:
           body: |
             Release of ollama-symlinks version ${{ steps.version.outputs.VERSION }}
 
-            ## Installation
+            ## 🚀 Installation
 
-            ### Linux
+            ### Linux & macOS (Quick Install)
             ```bash
-            curl -L -o ollama-symlinks https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.VERSION }}/ollama-symlinks-linux-amd64
-            chmod +x ollama-symlinks
-            sudo mv ollama-symlinks /usr/local/bin/
-            ```
-
-            ### macOS
-            ```bash
-            curl -L -o ollama-symlinks https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.VERSION }}/ollama-symlinks-macos-amd64
-            chmod +x ollama-symlinks
-            sudo mv ollama-symlinks /usr/local/bin/
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | bash
             ```
 
             ### Windows
-            Download the appropriate `.exe` file for your architecture from the releases page.
+            Download the appropriate `.exe` file for your architecture from the releases section below.
 
-            ## Usage
+            ## 📖 Usage
             ```bash
             ollama-symlinks --help
             ollama-symlinks --version
