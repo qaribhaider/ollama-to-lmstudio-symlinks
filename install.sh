@@ -13,11 +13,13 @@ INSTALL_DIR="/usr/local/bin"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # Function to log messages
 log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # Detect OS and Architecture
@@ -94,6 +96,13 @@ install() {
     fi
 
     log_success "${BINARY_NAME} installed successfully to ${INSTALL_DIR}"
+    
+    # Check if INSTALL_DIR is in PATH
+    if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
+        log_warn "${INSTALL_DIR} is not in your PATH. You may need to add it to your shell profile."
+    fi
+
+    log_info "If the command is not found, run 'rehash' (zsh) or 'hash -r' (bash) to refresh your shell."
     log_info "You can now run it using: ${BINARY_NAME} --help"
 }
 

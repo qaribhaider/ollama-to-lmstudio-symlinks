@@ -22,6 +22,9 @@ var Version = "dev"
 
 func main() {
 	if err := runApp(os.Args[1:], os.Stdin); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -31,6 +34,7 @@ func runApp(args []string, stdin io.Reader) error {
 	fs := flag.NewFlagSet("ollama-symlinks", flag.ContinueOnError)
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "Usage of %s:\n", fs.Name())
+		fmt.Fprintf(fs.Output(), "\nFlags:\n")
 		fs.VisitAll(func(f *flag.Flag) {
 			_, usage := flag.UnquoteUsage(f)
 			fmt.Fprintf(fs.Output(), "  --%s\t%s", f.Name, usage)
@@ -39,6 +43,9 @@ func runApp(args []string, stdin io.Reader) error {
 			}
 			fmt.Fprint(fs.Output(), "\n")
 		})
+		fmt.Fprintf(fs.Output(), "\nCommands:\n")
+		fmt.Fprintf(fs.Output(), "  delete\tInteractively delete symlinks from Ollama or LM Studio\n")
+		fmt.Fprintf(fs.Output(), "\nRun '%s [command] --help' for more information on a command.\n", fs.Name())
 	}
 
 	// Command line flags
