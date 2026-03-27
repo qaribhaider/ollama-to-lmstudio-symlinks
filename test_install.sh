@@ -24,7 +24,8 @@ log_info() { :; }
 log_success() { :; }
 log_error() { :; }
 
-# Source install.sh but don't let it run (it checks BASH_SOURCE)
+# Source install.sh but don't let it run
+export SKIP_INSTALL=true
 source ./install.sh
 
 # Test results

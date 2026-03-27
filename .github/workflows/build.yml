@@ -100,6 +100,11 @@ jobs:
             ### Windows
             Download the appropriate `.exe` file for your architecture from the releases section below.
 
+            ## 🗑️ Uninstallation
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/uninstall.sh | bash
+            ```
+
             ## 📖 Usage
             ```bash
             ollama-symlinks --help
