@@ -24,16 +24,27 @@ type SymlinkInfo struct {
 // preventing path traversal (Zip Slip) by ensuring the result
 // is within the base directory.
 func SecureJoin(base, name string) (string, error) {
-	if filepath.IsAbs(name) {
+	// Clean the name first
+	cleanName := filepath.Clean(name)
+
+	// Reject if it's an absolute path
+	if filepath.IsAbs(cleanName) {
 		return "", fmt.Errorf("absolute path not allowed: %s", name)
 	}
-	result := filepath.Join(base, filepath.Clean(name))
+
+	// Reject if it starts with a separator (root-relative on Windows)
+	if len(cleanName) > 0 && os.IsPathSeparator(cleanName[0]) {
+		return "", fmt.Errorf("absolute or root-relative path not allowed: %s", name)
+	}
+
+	result := filepath.Join(base, cleanName)
 	rel, err := filepath.Rel(base, result)
 	if err != nil {
 		return "", err
 	}
-	if strings.HasPrefix(rel, "..") || strings.HasPrefix(rel, "/") {
-		return "", fmt.Errorf("path traversal attempt detected: %s", name)
+	// Check for traversal or unexpected root reference
+	if strings.HasPrefix(rel, "..") || strings.HasPrefix(rel, string(filepath.Separator)) {
+		return "", fmt.Errorf("path traversal or escape attempt detected: %s", name)
 	}
 	return result, nil
 }
