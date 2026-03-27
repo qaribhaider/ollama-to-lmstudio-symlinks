@@ -33,6 +33,13 @@ You can also download the pre-compiled binaries from the [Releases](https://gith
 2. Make it executable: `chmod +x ollama-symlinks-*`.
 3. Move it to your path: `sudo mv ollama-symlinks-* /usr/local/bin/ollama-symlinks`.
 
+## 🗑️ Uninstallation
+
+To remove the utility from your system:
+
+```bash
+sudo curl -fsSL https://raw.githubusercontent.com/qaribhaider/ollama-to-lmstudio-symlinks/main/uninstall.sh | bash
+```
 ## 🚀 Quick Start
 
 ### Run with Defaults

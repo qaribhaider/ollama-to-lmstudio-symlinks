@@ -105,7 +105,7 @@ for arg in "$@"; do
     fi
 done
 
-# Execute if not being sourced (for testing)
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+# Execute unless skipped (for testing)
+if [ -z "$SKIP_INSTALL" ]; then
     install
 fi
