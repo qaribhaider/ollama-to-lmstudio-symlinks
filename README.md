@@ -17,6 +17,22 @@ If you have models downloaded in Ollama and want to use them in LM Studio, you t
 - **🧪 Dry Run**: Preview changes without making them
 - **🎯 Multi-component Support**: Handles complex models (e.g., LLaVA with projector files)
 
+## 🚀 Installation
+
+### One-Line Quick Install
+Install the latest version automatically on macOS or Linux (Follow manual installation for Windows):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/qaribhaider/ollama-to-lmstudio-symlinks/main/install.sh | bash
+```
+
+### Manual Installation
+You can also download the pre-compiled binaries from the [Releases](https://github.com/qaribhaider/ollama-to-lmstudio-symlinks/releases) page.
+
+1. Download the binary for your OS and architecture.
+2. Make it executable: `chmod +x ollama-symlinks-*`.
+3. Move it to your path: `sudo mv ollama-symlinks-* /usr/local/bin/ollama-symlinks`.
+
 ## 🚀 Quick Start
 
 ### Run with Defaults
@@ -44,7 +60,7 @@ This scans your Ollama manifests and creates symlinks in LM Studio under the `ol
 ./ollama-symlinks
 
 # Dry run (preview changes)
-./ollama-symlinks -dry-run
+./ollama-symlinks --dry-run
 ```
 
 #### 2. Link LM Studio → Ollama (Reverse)
@@ -55,7 +71,7 @@ This scans GGUF files in LM Studio and registers them with Ollama using a prefix
 ./ollama-symlinks --reverse
 
 # With custom prefix and dry run
-./ollama-symlinks --reverse --name-prefix="my-model" -dry-run
+./ollama-symlinks --reverse --name-prefix="my-model" --dry-run
 ```
 
 #### 3. Interactively Delete Symlinks
@@ -73,15 +89,15 @@ Safely remove symlinks created by this tool without touching the original model 
 
 | Flag | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `-ollama-dir` | `string` | `~/.ollama/models` | Path to the root Ollama models directory. |
-| `-lmstudio-dir` | `string` | `~/.cache/lm-studio/models` | Path to the root LM Studio models directory. |
-| `-reverse` | `bool` | `false` | Enable **Reverse Mode**: Link models from LM Studio → Ollama. |
-| `-name-prefix` | `string` | `lms` | Prefix used for naming models when importing into Ollama. |
-| `-skip-provider` | `string` | `ollama` | Folder name in LM Studio where symlinks are created. |
-| `-dry-run` | `bool` | `false` | Show logs of what would happen without making changes. |
-| `-verbose` | `bool` | `false` | Enable detailed logging of the process. |
-| `-version` | `bool` | `false` | Display the current version of the utility. |
-| `-help` | `bool` | `false` | Show the help message with all available flags. |
+| `--ollama-dir` | `string` | `~/.ollama/models` | Path to the root Ollama models directory. |
+| `--lmstudio-dir` | `string` | `~/.cache/lm-studio/models` | Path to the root LM Studio models directory. |
+| `--reverse` | `bool` | `false` | Enable **Reverse Mode**: Link models from LM Studio → Ollama. |
+| `--name-prefix` | `string` | `lms` | Prefix used for naming models when importing into Ollama. |
+| `--skip-provider` | `string` | `ollama` | Folder name in LM Studio where symlinks are created. |
+| `--dry-run` | `bool` | `false` | Show logs of what would happen without making changes. |
+| `--verbose` | `bool` | `false` | Enable detailed logging of the process. |
+| `--version` | `bool` | `false` | Display the current version of the utility. |
+| `--help` | `bool` | `false` | Show the help message with all available flags. |
 
 #### `delete` Subcommand Flags
 
@@ -91,14 +107,12 @@ Safely remove symlinks created by this tool without touching the original model 
 | `--dry-run` | `bool` | `false` | Preview which symlinks would be removed. |
 | `--verbose` | `bool` | `false` | Show detailed paths during the deletion. |
 
-### 📂 Custom Directories Example
-
 ```bash
 # Using custom paths for both applications
 ./ollama-symlinks \
-  -ollama-dir="/Volumes/External/Ollama" \
-  -lmstudio-dir="/Volumes/External/LMStudio" \
-  -verbose
+  --ollama-dir="/Volumes/External/Ollama" \
+  --lmstudio-dir="/Volumes/External/LMStudio" \
+  --verbose
 ```
 
 ## 🚀 Fancy some changes?
