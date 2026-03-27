@@ -20,8 +20,40 @@ type SymlinkInfo struct {
 	Target string
 }
 
+// SecureJoin joins a base directory and a user-provided name,
+// preventing path traversal (Zip Slip) by ensuring the result
+// is within the base directory.
+func SecureJoin(base, name string) (string, error) {
+	if filepath.IsAbs(name) {
+		return "", fmt.Errorf("absolute path not allowed: %s", name)
+	}
+	result := filepath.Join(base, filepath.Clean(name))
+	rel, err := filepath.Rel(base, result)
+	if err != nil {
+		return "", err
+	}
+	if strings.HasPrefix(rel, "..") || strings.HasPrefix(rel, "/") {
+		return "", fmt.Errorf("path traversal attempt detected: %s", name)
+	}
+	return result, nil
+}
+
+// SanitizeModelName ensures the model name only contains safe characters
+// for Ollama (alphanumeric, dots, dashes, underscores).
+func SanitizeModelName(name string) string {
+	var sb strings.Builder
+	for _, r := range strings.ToLower(name) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '-' || r == '_' {
+			sb.WriteRune(r)
+		} else {
+			sb.WriteRune('-') // Replace invalid chars with dash
+		}
+	}
+	return sb.String()
+}
+
 func CalculateSHA256(filePath string) (string, error) {
-	f, err := os.Open(filePath)
+	f, err := os.Open(filepath.Clean(filePath))
 	if err != nil {
 		return "", err
 	}
@@ -36,8 +68,16 @@ func CalculateSHA256(filePath string) (string, error) {
 }
 
 func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, dryRun, verbose bool) bool {
-	modelDir := filepath.Join(ollamaProviderDir, model.Name)
-	mainModelPath := filepath.Join(modelDir, model.Name+".gguf")
+	modelDir, err := SecureJoin(ollamaProviderDir, model.Name)
+	if err != nil {
+		fmt.Printf("❌ ERROR: %v\n", err)
+		return false
+	}
+	mainModelPath, err := SecureJoin(modelDir, model.Name+".gguf")
+	if err != nil {
+		fmt.Printf("❌ ERROR: %v\n", err)
+		return false
+	}
 
 	// Check if main model symlink already exists
 	if _, err := os.Lstat(mainModelPath); err == nil {
@@ -69,7 +109,11 @@ func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, d
 
 		// Create additional component symlinks (e.g., projector for llava)
 		for blobHash, filename := range model.AdditionalBlobs {
-			additionalPath := filepath.Join(modelDir, filename)
+			additionalPath, err := SecureJoin(modelDir, filename)
+			if err != nil {
+				fmt.Printf("⚠️  Warning: %v\n", err)
+				continue
+			}
 			// Convert digest format from "sha256:hash" to "sha256-hash" for blob filename
 			blobFilename := strings.Replace(blobHash, ":", "-", 1)
 			additionalSource := filepath.Join(ollamaDir, "blobs", blobFilename)
@@ -126,7 +170,11 @@ func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix stri
 	}
 
 	blobFilename := "sha256-" + hash
-	blobPath := filepath.Join(ollamaDir, "blobs", blobFilename)
+	blobPath, err := SecureJoin(filepath.Join(ollamaDir, "blobs"), blobFilename)
+	if err != nil {
+		fmt.Printf("❌ ERROR: %v\n", err)
+		return false
+	}
 
 	// 2. Create symlink in blobs if it doesn't exist
 	if !dryRun {
@@ -160,15 +208,16 @@ func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix stri
 
 	// 3. Register with Ollama using 'ollama create'
 	ollamaModelName := fmt.Sprintf("%s-%s", namePrefix, model.Name)
-	if !dryRun {
+		if !dryRun {
 		// Create a temporary Modelfile
-		modelfileContent := fmt.Sprintf("FROM %s\n", model.Path)
+		modelfileContent := fmt.Sprintf("FROM %s\n", filepath.Clean(model.Path))
 		tmpModelfile, err := os.CreateTemp("", "Modelfile-*")
 		if err != nil {
 			fmt.Printf("❌ ERROR: Could not create temporary Modelfile: %v\n", err)
 			return false
 		}
-		defer os.Remove(tmpModelfile.Name())
+		tmpName := filepath.Clean(tmpModelfile.Name())
+		defer os.Remove(tmpName)
 
 		if _, err := tmpModelfile.WriteString(modelfileContent); err != nil {
 			fmt.Printf("❌ ERROR: Could not write to temporary Modelfile: %v\n", err)
@@ -180,7 +229,11 @@ func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix stri
 			fmt.Printf("  🚀 Registering with Ollama as '%s'...\n", ollamaModelName)
 		}
 
-		cmd := exec.Command("ollama", "create", ollamaModelName, "-f", tmpModelfile.Name())
+		// Ensure the model name is sanitized for safety
+		safeModelName := SanitizeModelName(ollamaModelName)
+		safeTmpName := filepath.Clean(tmpName)
+
+		cmd := exec.Command("ollama", "create", safeModelName, "-f", safeTmpName)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			fmt.Printf("❌ ERROR: 'ollama create' failed: %v\nOutput: %s\n", err, string(output))

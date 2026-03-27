@@ -182,3 +182,28 @@ func TestRemoveSymlinks(t *testing.T) {
 		t.Error("Real file was accidentally deleted!")
 	}
 }
+
+func TestSecureJoin(t *testing.T) {
+	base := "/base/path"
+	
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{"Valid simple", "model", false},
+		{"Valid subpath", "publisher/model", false},
+		{"Traversal attempt", "../../etc/passwd", true},
+		{"Trailing traversal", "model/../..", true},
+		{"Absolute path attempt", "/etc/passwd", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := SecureJoin(base, tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("SecureJoin(%s, %s) error = %v, wantErr %v", base, tt.input, err, tt.wantErr)
+			}
+		})
+	}
+}
