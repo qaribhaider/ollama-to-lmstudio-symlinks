@@ -30,7 +30,9 @@ func DiscoverModels(ollamaDir string, verbose bool) ([]models.ModelInfo, error) 
 		}
 
 		// Parse manifest file
-		manifestData, err := os.ReadFile(path)
+		// G304: path is derived from filepath.Walk, which scans the manifestsDir.
+		// We clean the path to ensure it's normalized before reading.
+		manifestData, err := os.ReadFile(filepath.Clean(path))
 		if err != nil {
 			if verbose {
 				fmt.Printf("⚠️  Warning: Could not read manifest %s: %v\n", path, err)

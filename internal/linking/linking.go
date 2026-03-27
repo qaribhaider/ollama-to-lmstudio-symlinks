@@ -209,6 +209,12 @@ func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix stri
 	// 3. Register with Ollama using 'ollama create'
 	ollamaModelName := fmt.Sprintf("%s-%s", namePrefix, model.Name)
 		if !dryRun {
+		// Ensure model path doesn't contain newlines to prevent Modelfile injection
+		if strings.ContainsAny(model.Path, "\n\r") {
+			fmt.Printf("❌ ERROR: Invalid model path: contains newlines\n")
+			return false
+		}
+
 		// Create a temporary Modelfile
 		modelfileContent := fmt.Sprintf("FROM %s\n", filepath.Clean(model.Path))
 		tmpModelfile, err := os.CreateTemp("", "Modelfile-*")
@@ -216,8 +222,9 @@ func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix stri
 			fmt.Printf("❌ ERROR: Could not create temporary Modelfile: %v\n", err)
 			return false
 		}
-		tmpName := filepath.Clean(tmpModelfile.Name())
-		defer os.Remove(tmpName)
+		// Capture name immediately and clean it
+		tmpPath := filepath.Clean(tmpModelfile.Name())
+		defer os.Remove(tmpPath)
 
 		if _, err := tmpModelfile.WriteString(modelfileContent); err != nil {
 			fmt.Printf("❌ ERROR: Could not write to temporary Modelfile: %v\n", err)
@@ -231,9 +238,10 @@ func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix stri
 
 		// Ensure the model name is sanitized for safety
 		safeModelName := SanitizeModelName(ollamaModelName)
-		safeTmpName := filepath.Clean(tmpName)
 
-		cmd := exec.Command("ollama", "create", safeModelName, "-f", safeTmpName)
+		// G204: both safeModelName and tmpPath are sanitized/cleaned.
+		// Go's exec.Command passes arguments directly to OS, preventing shell injection.
+		cmd := exec.Command("ollama", "create", safeModelName, "-f", tmpPath)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			fmt.Printf("❌ ERROR: 'ollama create' failed: %v\nOutput: %s\n", err, string(output))
