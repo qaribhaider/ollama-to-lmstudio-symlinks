@@ -29,6 +29,17 @@ func main() {
 
 func runApp(args []string, stdin io.Reader) error {
 	fs := flag.NewFlagSet("ollama-symlinks", flag.ContinueOnError)
+	fs.Usage = func() {
+		fmt.Fprintf(fs.Output(), "Usage of %s:\n", fs.Name())
+		fs.VisitAll(func(f *flag.Flag) {
+			_, usage := flag.UnquoteUsage(f)
+			fmt.Fprintf(fs.Output(), "  --%s\t%s", f.Name, usage)
+			if f.DefValue != "" && f.DefValue != "false" {
+				fmt.Fprintf(fs.Output(), " (default %q)", f.DefValue)
+			}
+			fmt.Fprint(fs.Output(), "\n")
+		})
+	}
 
 	// Command line flags
 	var ollamaDir = fs.String("ollama-dir", ollama.GetDefaultOllamaDir(), "Path to Ollama models directory")
@@ -61,6 +72,17 @@ func runApp(args []string, stdin io.Reader) error {
 	if len(remainingArgs) > 0 && remainingArgs[0] == "delete" {
 		// New FlagSet for delete subcommand
 		deleteFs := flag.NewFlagSet("delete", flag.ContinueOnError)
+		deleteFs.Usage = func() {
+			fmt.Fprintf(deleteFs.Output(), "Usage of %s %s:\n", fs.Name(), deleteFs.Name())
+			deleteFs.VisitAll(func(f *flag.Flag) {
+				_, usage := flag.UnquoteUsage(f)
+				fmt.Fprintf(deleteFs.Output(), "  --%s\t%s", f.Name, usage)
+				if f.DefValue != "" && f.DefValue != "false" {
+					fmt.Fprintf(deleteFs.Output(), " (default %q)", f.DefValue)
+				}
+				fmt.Fprint(deleteFs.Output(), "\n")
+			})
+		}
 		from := deleteFs.String("from", "", "Source to delete symlinks from (ollama or lmstudio)")
 		deleteDryRun := deleteFs.Bool("dry-run", *dryRun, "Show what would be deleted without actually removing them")
 		deleteVerbose := deleteFs.Bool("verbose", *verbose, "Enable verbose output")
