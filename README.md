@@ -38,7 +38,7 @@ You can also download the pre-compiled binaries from the [Releases](https://gith
 To remove the utility from your system:
 
 ```bash
-sudo curl -fsSL https://raw.githubusercontent.com/qaribhaider/ollama-to-lmstudio-symlinks/main/uninstall.sh | bash
+curl -fsSL https://raw.githubusercontent.com/qaribhaider/ollama-to-lmstudio-symlinks/main/uninstall.sh | sudo bash
 ```
 ## 🚀 Quick Start
 
