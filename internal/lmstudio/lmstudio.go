@@ -10,11 +10,62 @@ import (
 )
 
 func GetDefaultLMStudioDir() string {
-	if env := os.Getenv("LMSTUDIO_MODELS"); env != "" {
-		return filepath.Clean(env)
+	candidates := GetLMStudioCandidates()
+	if len(candidates) > 0 {
+		return candidates[0]
 	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".cache", "lm-studio", "models")
+}
+
+func GetLMStudioCandidates() []string {
+	var candidates []string
+
+	// 1. Check LMSTUDIO_MODELS environment variable
+	if env := os.Getenv("LMSTUDIO_MODELS"); env != "" {
+		candidates = append(candidates, filepath.Clean(env))
+	}
+
+	// 2. Default location
+	home, err := os.UserHomeDir()
+	if err == nil {
+		candidates = append(candidates, filepath.Join(home, ".cache", "lm-studio", "models"))
+		candidates = append(candidates, filepath.Join(home, ".lmstudio", "models"))
+	}
+
+	// 3. Windows-specific locations
+	if os.Getenv("OS") == "Windows_NT" || os.PathSeparator == '\\' {
+		if local := os.Getenv("LOCALAPPDATA"); local != "" {
+			candidates = append(candidates, filepath.Join(local, "LMStudio", "models"))
+			candidates = append(candidates, filepath.Join(local, "lm-studio", "models"))
+		}
+		if appdata := os.Getenv("APPDATA"); appdata != "" {
+			candidates = append(candidates, filepath.Join(appdata, "LM Studio", "models"))
+		}
+		if home != "" {
+			candidates = append(candidates, filepath.Join(home, "AppData", "Local", "LM Studio", "models"))
+			candidates = append(candidates, filepath.Join(home, "AppData", "Roaming", "LM Studio", "models"))
+		}
+	}
+
+	// Filter to only include directories that actually exist
+	var existing []string
+	seen := make(map[string]map[string]bool)
+	_ = seen // prevent unused error if I don't use it right away
+	
+	unique := make(map[string]bool)
+	for _, c := range candidates {
+		c = filepath.Clean(c)
+		if unique[c] {
+			continue
+		}
+		unique[c] = true
+		if info, err := os.Stat(c); err == nil && info.IsDir() {
+			existing = append(existing, c)
+		}
+	}
+
+	return existing
 }
 
 func DiscoverLMStudioModels(lmstudioDir, skipProvider string, verbose bool) ([]models.LMStudioModel, error) {

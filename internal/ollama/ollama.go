@@ -11,11 +11,55 @@ import (
 )
 
 func GetDefaultOllamaDir() string {
-	if env := os.Getenv("OLLAMA_MODELS"); env != "" {
-		return filepath.Clean(env)
+	candidates := GetOllamaCandidates()
+	if len(candidates) > 0 {
+		return candidates[0]
 	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".ollama", "models")
+}
+
+func GetOllamaCandidates() []string {
+	var candidates []string
+
+	// 1. Check OLLAMA_MODELS environment variable
+	if env := os.Getenv("OLLAMA_MODELS"); env != "" {
+		candidates = append(candidates, filepath.Clean(env))
+	}
+
+	// 2. Default home directory location
+	home, err := os.UserHomeDir()
+	if err == nil {
+		candidates = append(candidates, filepath.Join(home, ".ollama", "models"))
+	}
+
+	// 3. Windows-specific locations
+	if os.Getenv("OS") == "Windows_NT" || os.PathSeparator == '\\' {
+		// LocalAppData
+		if local := os.Getenv("LOCALAPPDATA"); local != "" {
+			candidates = append(candidates, filepath.Join(local, "Programs", "Ollama", "models"))
+		}
+		// Explicit AppData/Local path if environment variable is missing
+		if home != "" {
+			candidates = append(candidates, filepath.Join(home, "AppData", "Local", "Programs", "Ollama", "models"))
+		}
+	}
+
+	// Filter to only include directories that actually exist
+	var existing []string
+	seen := make(map[string]bool)
+	for _, c := range candidates {
+		c = filepath.Clean(c)
+		if seen[c] {
+			continue
+		}
+		seen[c] = true
+		if info, err := os.Stat(c); err == nil && info.IsDir() {
+			existing = append(existing, c)
+		}
+	}
+
+	return existing
 }
 
 func DiscoverModels(ollamaDir string, verbose bool) ([]models.ModelInfo, error) {

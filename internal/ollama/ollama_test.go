@@ -23,13 +23,41 @@ func TestGetDefaultDirs(t *testing.T) {
 	}
 
 	// Test OLLAMA_MODELS env var
-	customPath := "/tmp/custom/ollama/models"
+	customPath := filepath.Join(t.TempDir(), "custom", "ollama", "models")
+	os.MkdirAll(customPath, 0755)
 	os.Setenv("OLLAMA_MODELS", customPath)
 	defer os.Unsetenv("OLLAMA_MODELS")
 
 	ollamaDir = GetDefaultOllamaDir()
 	if ollamaDir != customPath {
 		t.Errorf("Expected custom ollama dir %s, got %s", customPath, ollamaDir)
+	}
+}
+
+func TestGetOllamaCandidates(t *testing.T) {
+	tempDir := t.TempDir()
+	
+	// Create mock directories
+	path1 := filepath.Join(tempDir, "opt1")
+	path2 := filepath.Join(tempDir, "opt2")
+	os.MkdirAll(path1, 0755)
+	os.MkdirAll(path2, 0755)
+
+	// Set env var to point to one of them
+	os.Setenv("OLLAMA_MODELS", path1)
+	defer os.Unsetenv("OLLAMA_MODELS")
+
+	candidates := GetOllamaCandidates()
+	
+	foundPath1 := false
+	for _, c := range candidates {
+		if c == path1 {
+			foundPath1 = true
+			break
+		}
+	}
+	if !foundPath1 {
+		t.Errorf("Expected to find %s in candidates, but it was missing", path1)
 	}
 }
 
