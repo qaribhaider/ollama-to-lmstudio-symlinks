@@ -1,7 +1,7 @@
 # Build outputs
-ollama-symlinks
-ollama-symlinks-*
-*.exe
+/ollama-symlinks
+/ollama-symlinks-*
+/*.exe
 
 # macOS
 .DS_Store
