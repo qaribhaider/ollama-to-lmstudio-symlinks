@@ -74,14 +74,16 @@ func TestDiscoverModels(t *testing.T) {
 	}
 
 	model := discoveredModels[0]
-	expectedName := "test-model-latest"
+	expectedName := "test-model:latest"
 	if model.Name != expectedName {
 		t.Errorf("Expected model name %s, got %s", expectedName, model.Name)
 	}
 	if model.MainModelBlob != "sha256:12345abcdef" {
 		t.Errorf("Expected main model blob sha256:12345abcdef, got %s", model.MainModelBlob)
 	}
-	if model.AdditionalBlobs["sha256:fedcba54321"] != expectedName+"-projector.bin" {
-		t.Errorf("Expected projector blob mapping, but was not found or incorrect")
+	// Projector name uses - instead of :
+	expectedProjectorName := "test-model-latest-projector.bin"
+	if model.AdditionalBlobs["sha256:fedcba54321"] != expectedProjectorName {
+		t.Errorf("Expected projector name %s, got %s", expectedProjectorName, model.AdditionalBlobs["sha256:fedcba54321"])
 	}
 }

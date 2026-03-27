@@ -7,11 +7,13 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/linking"
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/lmstudio"
+	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/models"
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/ollama"
 )
 
@@ -97,13 +99,11 @@ func runApp(args []string, stdin io.Reader) error {
 }
 
 func runDelete(from, ollamaDir, lmstudioDir, skipProvider string, dryRun, verbose bool, stdin io.Reader) error {
-	var targetDir string
 	if from == "ollama" {
-		targetDir = filepath.Join(ollamaDir, "blobs")
-	} else if from == "lmstudio" {
-		targetDir = filepath.Join(lmstudioDir, skipProvider)
+		return runDeleteOllama(ollamaDir, dryRun, verbose, stdin)
 	}
 
+	targetDir := filepath.Join(lmstudioDir, skipProvider)
 	// Check target dir exists
 	if _, err := os.Stat(targetDir); os.IsNotExist(err) {
 		return fmt.Errorf("target directory for deletion does not exist: %s", targetDir)
@@ -170,6 +170,122 @@ func runDelete(from, ollamaDir, lmstudioDir, skipProvider string, dryRun, verbos
 	}
 
 	removed, failed := linking.RemoveSymlinks(toDelete, dryRun)
+	fmt.Printf("\n✅ Summary: %d removed, %d failed\n", removed, failed)
+	return nil
+}
+
+func runDeleteOllama(ollamaDir string, dryRun, verbose bool, stdin io.Reader) error {
+	// Check if Ollama manifests and blobs dirs exist
+	manifestsDir := filepath.Join(ollamaDir, "manifests")
+	if _, err := os.Stat(manifestsDir); os.IsNotExist(err) {
+		return fmt.Errorf("target directory for deletion does not exist: %s (manifests not found)", ollamaDir)
+	}
+
+	fmt.Printf("🔍 Scanning Ollama models for symlinks...\n")
+	allModels, err := ollama.DiscoverModels(ollamaDir, verbose)
+	if err != nil {
+		return fmt.Errorf("could not discover models: %w", err)
+	}
+
+	var symlinkedModels []models.ModelInfo
+	for _, m := range allModels {
+		// Check if the manifest uses a symlinked blob
+		// The blob filename is "sha256-hash" (no colon)
+		blobFilename := strings.Replace(m.MainModelBlob, ":", "-", 1)
+		blobPath := filepath.Join(ollamaDir, "blobs", blobFilename)
+		
+		info, err := os.Lstat(blobPath)
+		if err == nil && info.Mode()&os.ModeSymlink != 0 {
+			symlinkedModels = append(symlinkedModels, m)
+		} else if os.IsNotExist(err) && strings.HasPrefix(m.Name, "lms-") {
+			// Also include broken models (ghosts) if they have our prefix
+			symlinkedModels = append(symlinkedModels, m)
+		}
+	}
+
+	if len(symlinkedModels) == 0 {
+		fmt.Println("✅ No symlinked models found in Ollama")
+		return nil
+	}
+
+	fmt.Printf("📦 Found %d symlinked models in Ollama:\n", len(symlinkedModels))
+	for i, m := range symlinkedModels {
+		blobFilename := strings.Replace(m.MainModelBlob, ":", "-", 1)
+		target, err := os.Readlink(filepath.Join(ollamaDir, "blobs", blobFilename))
+		if err != nil {
+			target = "(missing blob)"
+		}
+		fmt.Printf("  %d) %s -> %s\n", i+1, m.Name, target)
+	}
+	fmt.Println()
+
+	fmt.Print("📝 Enter numbers to delete (e.g. 1, 2, 5) or 'all' (or 'q' to quit): ")
+	var input string
+	fmt.Fscanln(stdin, &input)
+
+	if input == "q" || input == "" {
+		fmt.Println("👋 Cancelled")
+		return nil
+	}
+
+	var toDelete []models.ModelInfo
+	if input == "all" {
+		toDelete = symlinkedModels
+	} else {
+		parts := strings.Split(input, ",")
+		for _, p := range parts {
+			var idx int
+			_, err := fmt.Sscanf(strings.TrimSpace(p), "%d", &idx)
+			if err != nil || idx < 1 || idx > len(symlinkedModels) {
+				fmt.Printf("⚠️  Skipping invalid selection: %s\n", p)
+				continue
+			}
+			toDelete = append(toDelete, symlinkedModels[idx-1])
+		}
+	}
+
+	if len(toDelete) == 0 {
+		fmt.Println("🤷 No valid items selected for deletion")
+		return nil
+	}
+
+	if !dryRun {
+		fmt.Printf("⚠️  Are you sure you want to delete %d models from Ollama? (y/n): ", len(toDelete))
+		var confirm string
+		fmt.Fscanln(stdin, &confirm)
+		if strings.ToLower(confirm) != "y" {
+			fmt.Println("👋 Cancelled")
+			return nil
+		}
+	}
+
+	var removed, failed int
+	for _, m := range toDelete {
+		if dryRun {
+			fmt.Printf("  Would remove: %s\n", m.Name)
+			removed++
+			continue
+		}
+
+		if verbose {
+			fmt.Printf("  🚀 Deleting %s via 'ollama rm'...\n", m.Name)
+		}
+		
+		// Use 'ollama rm' to properly clean up manifest and blob links
+		importPath := m.Name
+		// If it has no tag, it might need one? ollama.DiscoverModels adds -latest or similar?
+		// Actually ollama.DiscoverModels extracts variant.
+		
+		cmd := exec.Command("ollama", "rm", importPath)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			fmt.Printf("❌ ERROR: 'ollama rm %s' failed: %v\nOutput: %s\n", importPath, err, string(output))
+			failed++
+		} else {
+			removed++
+		}
+	}
+
 	fmt.Printf("\n✅ Summary: %d removed, %d failed\n", removed, failed)
 	return nil
 }

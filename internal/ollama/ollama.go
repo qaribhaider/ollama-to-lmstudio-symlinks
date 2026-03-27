@@ -63,7 +63,7 @@ func DiscoverModels(ollamaDir string, verbose bool) ([]models.ModelInfo, error) 
 		// Extract model name and variant
 		modelName := pathParts[len(pathParts)-2]
 		variant := pathParts[len(pathParts)-1]
-		fullModelName := fmt.Sprintf("%s-%s", modelName, variant)
+		fullModelName := fmt.Sprintf("%s:%s", modelName, variant)
 
 		// Parse layers to find model components
 		modelInfo := models.ModelInfo{
@@ -77,7 +77,9 @@ func DiscoverModels(ollamaDir string, verbose bool) ([]models.ModelInfo, error) 
 				modelInfo.MainModelBlob = layer.Digest
 			case "application/vnd.ollama.image.projector":
 				// For multimodal models like llava
-				projectorName := fmt.Sprintf("%s-projector.bin", fullModelName)
+				// Ensure filename is safe for filesystem
+				safeProjectorName := strings.Replace(fullModelName, ":", "-", -1)
+				projectorName := fmt.Sprintf("%s-projector.bin", safeProjectorName)
 				modelInfo.AdditionalBlobs[layer.Digest] = projectorName
 			}
 		}

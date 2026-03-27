@@ -79,12 +79,14 @@ func CalculateSHA256(filePath string) (string, error) {
 }
 
 func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, dryRun, verbose bool) bool {
-	modelDir, err := SecureJoin(ollamaProviderDir, model.Name)
+	// Sanitize name for directory usage (replace : with - for tags)
+	safeDirName := strings.Replace(model.Name, ":", "-", -1)
+	modelDir, err := SecureJoin(ollamaProviderDir, safeDirName)
 	if err != nil {
 		fmt.Printf("❌ ERROR: %v\n", err)
 		return false
 	}
-	mainModelPath, err := SecureJoin(modelDir, model.Name+".gguf")
+	mainModelPath, err := SecureJoin(modelDir, safeDirName+".gguf")
 	if err != nil {
 		fmt.Printf("❌ ERROR: %v\n", err)
 		return false
