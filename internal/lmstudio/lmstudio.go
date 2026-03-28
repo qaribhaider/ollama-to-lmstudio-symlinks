@@ -18,11 +18,22 @@ func GetDefaultLMStudioDir() string {
 	return filepath.Join(home, ".cache", "lm-studio", "models")
 }
 
+func isSafePath(p string) bool {
+	clean := filepath.Clean(p)
+	if clean == "." || clean == "/" || clean == `\` || len(clean) == 2 && clean[1] == ':' {
+		return false
+	}
+	if len(clean) == 3 && clean[1] == ':' && clean[2] == '\\' {
+		return false
+	}
+	return true
+}
+
 func GetLMStudioCandidates() []string {
 	var candidates []string
 
 	// 1. Check LMSTUDIO_MODELS environment variable
-	if env := os.Getenv("LMSTUDIO_MODELS"); env != "" {
+	if env := os.Getenv("LMSTUDIO_MODELS"); env != "" && isSafePath(env) {
 		candidates = append(candidates, filepath.Clean(env))
 	}
 
@@ -50,8 +61,6 @@ func GetLMStudioCandidates() []string {
 
 	// Filter to only include directories that actually exist
 	var existing []string
-	seen := make(map[string]map[string]bool)
-	_ = seen // prevent unused error if I don't use it right away
 	
 	unique := make(map[string]bool)
 	for _, c := range candidates {
@@ -81,9 +90,9 @@ func DiscoverLMStudioModels(lmstudioDir, skipProvider string, verbose bool) ([]m
 			return filepath.SkipDir
 		}
 
-		// Check if it's a symlink - SKIP it per user request
+		// Check if it's a symlink FIRST to avoid IsDir early returns on symlinked folders
 		if info.Mode()&os.ModeSymlink != 0 {
-			if verbose && !info.IsDir() {
+			if verbose {
 				fmt.Printf("⏭️  Skipping symlink: %s\n", path)
 			}
 			return nil

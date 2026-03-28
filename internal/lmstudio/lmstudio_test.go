@@ -56,6 +56,15 @@ func TestGetLMStudioCandidates(t *testing.T) {
 	if !foundPath1 {
 		t.Errorf("Expected to find %s in candidates, but it was missing", path1)
 	}
+
+	// Test unsafe path rejection
+	os.Setenv("LMSTUDIO_MODELS", "/")
+	candidates = GetLMStudioCandidates()
+	for _, c := range candidates {
+		if c == "/" || c == `\` {
+			t.Errorf("Unsafe path %s was not rejected!", c)
+		}
+	}
 }
 
 func TestDiscoverLMStudioModels(t *testing.T) {

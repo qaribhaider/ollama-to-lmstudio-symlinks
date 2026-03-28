@@ -32,11 +32,22 @@ func GetDefaultOllamaDir() string {
 	return filepath.Join(home, ".ollama", "models")
 }
 
+func isSafePath(p string) bool {
+	clean := filepath.Clean(p)
+	if clean == "." || clean == "/" || clean == `\` || len(clean) == 2 && clean[1] == ':' {
+		return false // Reject roots like /, \, C:
+	}
+	if len(clean) == 3 && clean[1] == ':' && clean[2] == '\\' {
+		return false // Reject C:\
+	}
+	return true
+}
+
 func GetOllamaCandidates() []string {
 	var candidates []string
 
 	// 1. Check OLLAMA_MODELS environment variable
-	if env := os.Getenv("OLLAMA_MODELS"); env != "" {
+	if env := os.Getenv("OLLAMA_MODELS"); env != "" && isSafePath(env) {
 		candidates = append(candidates, filepath.Clean(env))
 	}
 
