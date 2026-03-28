@@ -10,7 +10,7 @@ If you have models downloaded in Ollama and want to use them in LM Studio, you t
 
 - **🔄 Bidirectional Sync**: Link Ollama models to LM Studio OR LM Studio models to Ollama
 - **🔍 Dynamic Discovery**: Automatically scans and discovers models in both applications
-- **🧹 Interactive Cleanup**: Safely remove symlinks through the interactive `delete` command
+- **🧹 Interactive & Auto Cleanup**: Safely remove symlinks through the interactive `delete` command, or auto-discover and wipe broken ghost-links using `cleanup`
 - **⚙️ Configurable Paths**: Customize directories via command-line flags
 - **🛡️ Safe Operations**: Never overwrites existing files; ignores existing symlinks to avoid circular loops
 - **📊 Clear Status**: Shows what was created vs. skipped
@@ -53,7 +53,7 @@ This will:
 - Scan `~/.ollama/models` for Ollama models
 - Create symlinks in `~/.cache/lm-studio/models/ollama/`
 
-⚠️ **Important**: Do not delete symlinked models through the LM Studio UI, as it may cause issues if you try to symlink them again. Instead, use the built-in cleanup tool: `ollama-symlinks delete --from lmstudio`.
+⚠️ **Important**: Do not delete symlinked models through the LM Studio UI, as it may cause issues if you try to symlink them again. Instead, use the built-in tool: `ollama-symlinks delete --from lmstudio`.
 
 ## 📖 Usage
 
@@ -125,6 +125,13 @@ If you delete an Ollama model directly using `ollama rm`, the symlinks in LM Stu
 | `--dry-run` | `bool` | `false` | Preview which symlinks would be removed. |
 | `--verbose` | `bool` | `false` | Show detailed paths during the deletion. |
 
+#### `cleanup` Subcommand Flags
+
+| Flag | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `--dry-run` | `bool` | `false` | Preview which broken symlinks would be removed. |
+| `--verbose` | `bool` | `false` | Enable detailed logging of the process. |
+
 ```bash
 # Using custom paths for both applications
 ./ollama-symlinks \
@@ -133,112 +140,6 @@ If you delete an Ollama model directly using `ollama rm`, the symlinks in LM Stu
   --verbose
 ```
 
-## 🚀 Fancy some changes?
-
-### Build from Source
-
-#### Using Make (Recommended)
-
-```bash
-# Build the binary
-make build
-
-# Clean built files
-make clean
-
-# Run tests
-make test
-
-# Show version
-make version
-
-# Install to /usr/local/bin
-make install
-```
-
-#### Using the Build Script
-
-```bash
-# Build the binary
-./build.sh
-
-# Clean built files
-rm -f ollama-symlinks
-```
-
-#### Using Go Directly
-
-```bash
-# Build the binary
-go build -o ollama-symlinks ./cmd/ollama-symlinks
-
-# Run the binary
-./ollama-symlinks
-```
-
-### Version Management
-
-The version is stored in the `VERSION` file. To update the version:
-
-```bash
-# Using Make (recommended)
-make update-version
-
-# Or manually
-echo "v0.2.0" > VERSION
-```
-
-After updating the version, commit the changes and push to trigger a new release.
-
-## 🔧 How It Works
-
-### Forward Mode (Ollama → LM Studio)
-1. **Scans** the Ollama manifests directory (`~/.ollama/models/manifests/`)
-2. **Parses** JSON manifest files to identify model components and blobs.
-3. **Maps** names to an LM Studio-friendly format (e.g., `llama3-7b-latest.gguf`).
-4. **Creates** an `ollama` provider directory in your LM Studio models folder.
-5. **Generates** symbolic links pointing to the original Ollama blobs.
-
-### Reverse Mode (LM Studio → Ollama)
-1. **Scans** the LM Studio models directory for `.gguf` files.
-2. **Filters** out existing symlinks and the `ollama` provider folder to avoid circular loops.
-3. **Calculates** SHA256 checksums to create Ollama-compatible blob identifiers.
-4. **Symlinks** the GGUF file into the Ollama `blobs` directory.
-5. **Registers** the model with Ollama using `ollama create` and a custom Modelfile.
-
-## 💡 Example Output
-
-```
-🔍 Scanning Ollama models in: /Users/user/.ollama/models
-🎯 Target LM Studio directory: /Users/user/.cache/lm-studio/models
-
-📦 Found 4 models:
-  • llama3.2-3b
-  • gemma3-4b
-  • qwen3-8b
-  • llava-7b
-
-🔗 CREATING: llama3.2-3b
-🔗 CREATING: gemma3-4b
-⏭️  SKIPPED: qwen3-8b (already exists)
-🔗 CREATING: llava-7b
-
-✅ Summary: 3 created, 1 skipped
-🎉 Models are now available in LM Studio under the 'ollama' provider
-```
-
-## 🛠️ Requirements
-
-### To Build
-
-- Go 1.26.1+ (Modular Go project)
-
-### To Run
-
-- **No Go required** - the compiled binary is standalone
-- macOS, Linux, or Windows
-- Existing Ollama installation with downloaded models
-- LM Studio installation
 
 ## ⚠️ Important Notes
 
@@ -269,7 +170,7 @@ ls -la ~/.ollama/models/manifests/
 
 ## 🤝 Contributing
 
-Feel free to submit issues or pull requests to improve this tool!
+Feel free to submit issues or pull requests to improve this tool! For details on building from source, system requirements, and an architecture overview, please see our [Contributing Guide](CONTRIBUTING.md).
 
 ## 📄 License
 
