@@ -5,10 +5,23 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/models"
 )
+
+// ValidateDigest ensures a digest matches the expected format (sha256:64hexchars)
+// to prevent path traversal when constructing blob paths.
+func ValidateDigest(digest string) error {
+	// Pattern matched lazily to avoid init cycles if needed, but safe at package level
+	// Actually we can just define it inside or as a package var.
+	matched, _ := regexp.MatchString(`^sha256:[0-9a-f]{64}$`, digest)
+	if !matched {
+		return fmt.Errorf("invalid digest format: %q", digest)
+	}
+	return nil
+}
 
 func GetDefaultOllamaDir() string {
 	candidates := GetOllamaCandidates()
@@ -81,18 +94,12 @@ func DiscoverModels(ollamaDir string, verbose bool) ([]models.ModelInfo, error) 
 		// We clean the path to ensure it's normalized before reading.
 		manifestData, err := os.ReadFile(filepath.Clean(path))
 		if err != nil {
-			if verbose {
-				fmt.Printf("⚠️  Warning: Could not read manifest %s: %v\n", path, err)
-			}
-			return nil
+			return fmt.Errorf("could not read manifest %s: %w", path, err)
 		}
 
 		var manifest models.OllamaManifest
 		if err := json.Unmarshal(manifestData, &manifest); err != nil {
-			if verbose {
-				fmt.Printf("⚠️  Warning: Could not parse manifest %s: %v\n", path, err)
-			}
-			return nil
+			return fmt.Errorf("could not parse manifest %s: %w", path, err)
 		}
 
 		// Extract model name from path
@@ -101,10 +108,7 @@ func DiscoverModels(ollamaDir string, verbose bool) ([]models.ModelInfo, error) 
 		pathParts := strings.Split(strings.Trim(relativePath, "/"), "/")
 
 		if len(pathParts) < 3 {
-			if verbose {
-				fmt.Printf("⚠️  Warning: Unexpected manifest path format: %s\n", path)
-			}
-			return nil
+			return fmt.Errorf("unexpected manifest path format: %s", path)
 		}
 
 		// Extract model name and variant
@@ -119,6 +123,10 @@ func DiscoverModels(ollamaDir string, verbose bool) ([]models.ModelInfo, error) 
 		}
 
 		for _, layer := range manifest.Layers {
+			if err := ValidateDigest(layer.Digest); err != nil {
+				return fmt.Errorf("invalid layer in %s: %w", path, err)
+			}
+
 			switch layer.MediaType {
 			case "application/vnd.ollama.image.model":
 				modelInfo.MainModelBlob = layer.Digest
@@ -132,10 +140,7 @@ func DiscoverModels(ollamaDir string, verbose bool) ([]models.ModelInfo, error) 
 		}
 
 		if modelInfo.MainModelBlob == "" {
-			if verbose {
-				fmt.Printf("⚠️  Warning: No main model blob found for %s\n", fullModelName)
-			}
-			return nil
+			return fmt.Errorf("no main model blob found for %s", fullModelName)
 		}
 
 		discoveredModels = append(discoveredModels, modelInfo)

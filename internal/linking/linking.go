@@ -114,7 +114,11 @@ func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, d
 		// Create main model symlink
 		// Convert digest format from "sha256:hash" to "sha256-hash" for blob filename
 		blobFilename := strings.Replace(model.MainModelBlob, ":", "-", 1)
-		sourcePath := filepath.Join(ollamaDir, "blobs", blobFilename)
+		sourcePath, err := SecureJoin(filepath.Join(ollamaDir, "blobs"), blobFilename)
+		if err != nil {
+			fmt.Printf("❌ ERROR: unsafe blob path from digest %q: %v\n", model.MainModelBlob, err)
+			return false
+		}
 		if err := os.Symlink(sourcePath, mainModelPath); err != nil {
 			fmt.Printf("❌ ERROR: Could not create symlink for %s: %v\n", model.Name, err)
 			return false
@@ -133,7 +137,11 @@ func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, d
 			}
 			// Convert digest format from "sha256:hash" to "sha256-hash" for blob filename
 			blobFilename := strings.Replace(blobHash, ":", "-", 1)
-			additionalSource := filepath.Join(ollamaDir, "blobs", blobFilename)
+			additionalSource, err := SecureJoin(filepath.Join(ollamaDir, "blobs"), blobFilename)
+			if err != nil {
+				fmt.Printf("⚠️  Warning: unsafe additional blob path %q: %v\n", blobHash, err)
+				continue
+			}
 
 			// Skip if already exists
 			if _, err := os.Lstat(additionalPath); err == nil {
@@ -152,13 +160,20 @@ func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, d
 	} else {
 		// Dry run - just show what would be done
 		blobFilename := strings.Replace(model.MainModelBlob, ":", "-", 1)
-		sourcePath := filepath.Join(ollamaDir, "blobs", blobFilename)
+		sourcePath, err := SecureJoin(filepath.Join(ollamaDir, "blobs"), blobFilename)
+		if err != nil {
+			fmt.Printf("❌ ERROR: unsafe blob path for dry run: %v\n", err)
+			return false
+		}
 		fmt.Printf("  Would create: %s -> %s\n", mainModelPath, sourcePath)
 
 		for blobHash, filename := range model.AdditionalBlobs {
 			additionalPath := filepath.Join(modelDir, filename)
 			blobFilename := strings.Replace(blobHash, ":", "-", 1)
-			additionalSource := filepath.Join(ollamaDir, "blobs", blobFilename)
+			additionalSource, err := SecureJoin(filepath.Join(ollamaDir, "blobs"), blobFilename)
+			if err != nil {
+				continue
+			}
 			fmt.Printf("  Would create: %s -> %s\n", additionalPath, additionalSource)
 		}
 	}

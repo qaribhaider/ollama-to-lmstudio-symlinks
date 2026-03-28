@@ -291,9 +291,15 @@ func runDeleteOllama(ollamaDir string, dryRun, verbose bool, stdin io.Reader) er
 	fmt.Printf("📦 Found %d symlinked models in Ollama:\n", len(symlinkedModels))
 	for i, m := range symlinkedModels {
 		blobFilename := strings.Replace(m.MainModelBlob, ":", "-", 1)
-		target, err := os.Readlink(filepath.Join(ollamaDir, "blobs", blobFilename))
-		if err != nil {
-			target = "(missing blob)"
+		targetPath, err := linking.SecureJoin(filepath.Join(ollamaDir, "blobs"), blobFilename)
+		
+		target := "(unsafe blob path)"
+		if err == nil {
+			if readTarget, err := os.Readlink(targetPath); err == nil {
+				target = readTarget
+			} else {
+				target = "(missing blob)"
+			}
 		}
 		fmt.Printf("  %d) %s -> %s\n", i+1, m.Name, target)
 	}

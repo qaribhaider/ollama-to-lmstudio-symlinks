@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/models"
@@ -61,6 +62,30 @@ func TestGetOllamaCandidates(t *testing.T) {
 	}
 }
 
+func TestValidateDigest(t *testing.T) {
+	valid64 := strings.Repeat("a", 64)
+	tests := []struct {
+		name    string
+		digest  string
+		wantErr bool
+	}{
+		{"Valid", "sha256:" + valid64, false},
+		{"Missing prefix", valid64, true},
+		{"Wrong prefix", "md5:" + valid64, true},
+		{"Too short", "sha256:abc", true},
+		{"Invalid chars", "sha256:" + strings.Repeat("Z", 64), true},
+		{"Path Traversal", "sha256:../../etc/passwd", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := ValidateDigest(tt.digest); (err != nil) != tt.wantErr {
+				t.Errorf("ValidateDigest(%q) error = %v, wantErr %v", tt.digest, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestDiscoverModels(t *testing.T) {
 	tempDir := t.TempDir()
 	manifestsDir := filepath.Join(tempDir, "manifests")
@@ -81,11 +106,11 @@ func TestDiscoverModels(t *testing.T) {
 	}{
 		{
 			MediaType: "application/vnd.ollama.image.model",
-			Digest:    "sha256:12345abcdef",
+			Digest:    "sha256:" + strings.Repeat("1", 64),
 		},
 		{
 			MediaType: "application/vnd.ollama.image.projector",
-			Digest:    "sha256:fedcba54321",
+			Digest:    "sha256:" + strings.Repeat("2", 64),
 		},
 	}
 	manifestData, err := json.Marshal(manifest)
@@ -117,12 +142,12 @@ func TestDiscoverModels(t *testing.T) {
 	if model.Name != expectedName {
 		t.Errorf("Expected model name %s, got %s", expectedName, model.Name)
 	}
-	if model.MainModelBlob != "sha256:12345abcdef" {
-		t.Errorf("Expected main model blob sha256:12345abcdef, got %s", model.MainModelBlob)
+	if model.MainModelBlob != "sha256:"+strings.Repeat("1", 64) {
+		t.Errorf("Expected main model blob sha256:111..., got %s", model.MainModelBlob)
 	}
 	// Projector name uses - instead of :
 	expectedProjectorName := "test-model-latest-projector.bin"
-	if model.AdditionalBlobs["sha256:fedcba54321"] != expectedProjectorName {
-		t.Errorf("Expected projector name %s, got %s", expectedProjectorName, model.AdditionalBlobs["sha256:fedcba54321"])
+	if model.AdditionalBlobs["sha256:"+strings.Repeat("2", 64)] != expectedProjectorName {
+		t.Errorf("Expected projector name %s, got %s", expectedProjectorName, model.AdditionalBlobs["sha256:"+strings.Repeat("2", 64)])
 	}
 }
