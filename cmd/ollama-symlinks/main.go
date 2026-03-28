@@ -5,10 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/linking"
@@ -166,13 +166,17 @@ func runApp(args []string, stdin io.Reader) error {
 		if _, err := os.Stat(*lmstudioDir); os.IsNotExist(err) {
 			return fmt.Errorf("LM Studio directory does not exist: %s. Use --lmstudio-dir or --deep-scan to help find it.", *lmstudioDir)
 		}
-		runReverse(*lmstudioDir, *ollamaDir, *namePrefix, *skipProvider, *dryRun, *verbose)
+		if err := runReverse(*lmstudioDir, *ollamaDir, *namePrefix, *skipProvider, *dryRun, *verbose); err != nil {
+			return err
+		}
 	} else {
 		// Check Ollama dir exists
 		if _, err := os.Stat(*ollamaDir); os.IsNotExist(err) {
 			return fmt.Errorf("Ollama directory does not exist: %s. Use --ollama-dir or --deep-scan to help find it.", *ollamaDir)
 		}
-		runForward(*ollamaDir, *lmstudioDir, *dryRun, *verbose)
+		if err := runForward(*ollamaDir, *lmstudioDir, *dryRun, *verbose); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -359,8 +363,14 @@ func runDeleteOllama(ollamaDir string, dryRun, verbose bool, stdin io.Reader) er
 		
 		// Use 'ollama rm' to properly clean up manifest and blob links
 		importPath := m.Name
-		// If it has no tag, it might need one? ollama.DiscoverModels adds -latest or similar?
-		// Actually ollama.DiscoverModels extracts variant.
+		// Validate model name to prevent accidental flag interpretation
+		// Note that some models might have namespaces like "library/llama2:latest", 
+		// but the discover logic extracts it currently as "name:variant"
+		if matched, _ := regexp.MatchString(`^[a-zA-Z0-9._-]+:[a-zA-Z0-9._-]+$`, importPath); !matched {
+			fmt.Printf("❌ ERROR: Refusing to run 'ollama rm' with unsafe model name: %q\n", importPath)
+			failed++
+			continue
+		}
 		
 		cmd := exec.Command("ollama", "rm", importPath)
 		output, err := cmd.CombinedOutput()
@@ -376,7 +386,7 @@ func runDeleteOllama(ollamaDir string, dryRun, verbose bool, stdin io.Reader) er
 	return nil
 }
 
-func runForward(ollamaDir, lmstudioDir string, dryRun, verbose bool) {
+func runForward(ollamaDir, lmstudioDir string, dryRun, verbose bool) error {
 	fmt.Printf("🔍 Scanning Ollama models in: %s\n", ollamaDir)
 	fmt.Printf("🎯 Target LM Studio directory: %s\n", lmstudioDir)
 	if dryRun {
@@ -387,12 +397,12 @@ func runForward(ollamaDir, lmstudioDir string, dryRun, verbose bool) {
 	// Discover models
 	models, err := ollama.DiscoverModels(ollamaDir, verbose)
 	if err != nil {
-		log.Fatalf("Error discovering models: %v", err)
+		return fmt.Errorf("error discovering models: %w", err)
 	}
 
 	if len(models) == 0 {
 		fmt.Println("❌ No models found in Ollama directory")
-		return
+		return nil
 	}
 
 	fmt.Printf("📦 Found %d models:\n", len(models))
@@ -405,7 +415,7 @@ func runForward(ollamaDir, lmstudioDir string, dryRun, verbose bool) {
 	ollamaProviderDir := filepath.Join(lmstudioDir, "ollama")
 	if !dryRun {
 		if err := os.MkdirAll(ollamaProviderDir, 0755); err != nil {
-			log.Fatalf("Error creating ollama provider directory: %v", err)
+			return fmt.Errorf("error creating ollama provider directory: %w", err)
 		}
 	}
 
@@ -426,9 +436,10 @@ func runForward(ollamaDir, lmstudioDir string, dryRun, verbose bool) {
 	if created > 0 && !dryRun {
 		fmt.Printf("🎉 Models are now available in LM Studio under the 'ollama' provider\n")
 	}
+	return nil
 }
 
-func runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider string, dryRun, verbose bool) {
+func runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider string, dryRun, verbose bool) error {
 	fmt.Printf("🔍 Scanning LM Studio models in: %s\n", lmstudioDir)
 	fmt.Printf("🎯 Target Ollama directory: %s\n", ollamaDir)
 	if dryRun {
@@ -439,12 +450,12 @@ func runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider string, dryRun,
 	// Discover models
 	models, err := lmstudio.DiscoverLMStudioModels(lmstudioDir, skipProvider, verbose)
 	if err != nil {
-		log.Fatalf("Error discovering models: %v", err)
+		return fmt.Errorf("error discovering models: %w", err)
 	}
 
 	if len(models) == 0 {
 		fmt.Println("❌ No eligible models found in LM Studio directory")
-		return
+		return nil
 	}
 
 	fmt.Printf("📦 Found %d eligible models:\n", len(models))
@@ -470,6 +481,7 @@ func runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider string, dryRun,
 	if created > 0 && !dryRun {
 		fmt.Printf("🎉 Models are now available in Ollama with the '%s-' prefix\n", namePrefix)
 	}
+	return nil
 }
 
 func runCleanup(lmstudioDir string, dryRun, verbose bool, stdin io.Reader) error {
