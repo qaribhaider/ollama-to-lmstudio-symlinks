@@ -159,8 +159,17 @@ func TestRemoveSymlinks(t *testing.T) {
 	linkPath := filepath.Join(tempDir, "link.txt")
 	os.Symlink(realFile, linkPath)
 
+	// Test trying to remove a non-symlink
+	removed, failed := RemoveSymlinks([]string{realFile}, false)
+	if removed != 0 || failed != 1 {
+		t.Errorf("Non-symlink: expected 0 removed, 1 failed, got %d/%d", removed, failed)
+	}
+	if _, err := os.Stat(realFile); os.IsNotExist(err) {
+		t.Error("Real file was accidentally deleted!")
+	}
+
 	// Test dry run
-	removed, failed := RemoveSymlinks([]string{linkPath}, true)
+	removed, failed = RemoveSymlinks([]string{linkPath}, true)
 	if removed != 1 || failed != 0 {
 		t.Errorf("Dry run: expected 1 removed, 0 failed, got %d/%d", removed, failed)
 	}

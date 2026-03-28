@@ -93,8 +93,12 @@ func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, d
 	}
 
 	// Check if main model symlink already exists
-	if _, err := os.Lstat(mainModelPath); err == nil {
-		fmt.Printf("⏭️  SKIPPED: %s (already exists)\n", model.Name)
+	if info, err := os.Lstat(mainModelPath); err == nil {
+		if info.Mode()&os.ModeSymlink == 0 {
+			fmt.Printf("⚠️  WARNING: %s exists but is NOT a symlink — skipping\n", mainModelPath)
+		} else {
+			fmt.Printf("⏭️  SKIPPED: %s (already exists)\n", model.Name)
+		}
 		return false
 	}
 
@@ -197,7 +201,7 @@ func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix stri
 			return false
 		}
 
-		if _, err := os.Lstat(blobPath); err != nil {
+		if info, err := os.Lstat(blobPath); err != nil {
 			if os.IsNotExist(err) {
 				if err := os.Symlink(model.Path, blobPath); err != nil {
 					fmt.Printf("❌ ERROR: Could not create symlink in blobs: %v\n", err)
@@ -211,7 +215,9 @@ func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix stri
 				return false
 			}
 		} else {
-			if verbose {
+			if info.Mode()&os.ModeSymlink == 0 {
+				fmt.Printf("⚠️  WARNING: %s exists but is NOT a symlink — skipping\n", blobFilename)
+			} else if verbose {
 				fmt.Printf("  ⏭️  Blob already exists: %s\n", blobFilename)
 			}
 		}
@@ -278,20 +284,20 @@ func ListSymlinks(dir string) ([]SymlinkInfo, error) {
 		return nil, nil // Return empty if dir doesn't exist
 	}
 
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
 		// Only look for symbolic links
-		if info.Mode()&os.ModeSymlink != 0 {
+		if d.Type()&os.ModeSymlink != 0 {
 			target, err := os.Readlink(path)
 			if err != nil {
 				return nil // Skip if we can't read it
 			}
 
 			symlinks = append(symlinks, SymlinkInfo{
-				Name:   info.Name(),
+				Name:   d.Name(),
 				Path:   path,
 				Target: target,
 			})
@@ -308,6 +314,18 @@ func RemoveSymlinks(paths []string, dryRun bool) (int, int) {
 		if dryRun {
 			fmt.Printf("  Would remove: %s\n", path)
 			removed++
+			continue
+		}
+
+		info, err := os.Lstat(path)
+		if err != nil {
+			fmt.Printf("❌ ERROR: Could not stat %s: %v\n", path, err)
+			failed++
+			continue
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			fmt.Printf("❌ ERROR: Refusing to remove non-symlink: %s\n", path)
+			failed++
 			continue
 		}
 
@@ -330,13 +348,13 @@ func FindBrokenSymlinks(dir string) ([]SymlinkInfo, error) {
 		return nil, nil
 	}
 
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
 		// Check if it's a symlink
-		if info.Mode()&os.ModeSymlink != 0 {
+		if d.Type()&os.ModeSymlink != 0 {
 			target, err := os.Readlink(path)
 			if err != nil {
 				return nil // Skip if unreadable
@@ -347,7 +365,7 @@ func FindBrokenSymlinks(dir string) ([]SymlinkInfo, error) {
 			_, err = os.Stat(path)
 			if os.IsNotExist(err) {
 				broken = append(broken, SymlinkInfo{
-					Name:   info.Name(),
+					Name:   d.Name(),
 					Path:   path,
 					Target: target,
 				})
