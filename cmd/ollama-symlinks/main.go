@@ -111,8 +111,13 @@ func runApp(args []string, stdin io.Reader) error {
 		return runDelete(*from, *ollamaDir, *lmstudioDir, *skipProvider, *deleteDryRun, *deleteVerbose, stdin)
 	}
 
-	if len(remainingArgs) > 0 && remainingArgs[0] == "cleanup" {
-		return runCleanup(*lmstudioDir, *dryRun, *verbose, stdin)
+	if len(remainingArgs) > 0 {
+		if remainingArgs[0] == "cleanup" {
+			return runCleanup(*lmstudioDir, *dryRun, *verbose, stdin)
+		}
+
+		// Unknown command
+		return fmt.Errorf("unknown command %q. Run '%s --help' for usage", remainingArgs[0], fs.Name())
 	}
 
 	// Path resolution with candidates
