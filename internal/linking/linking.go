@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/models"
+	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/ui"
 )
 
 // SymlinkInfo holds metadata about a discovered symbolic link
@@ -83,31 +84,31 @@ func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, d
 	safeDirName := strings.Replace(model.Name, ":", "-", -1)
 	modelDir, err := SecureJoin(ollamaProviderDir, safeDirName)
 	if err != nil {
-		fmt.Printf("❌ ERROR: %v\n", err)
+		ui.PrintError(fmt.Sprintf("%v", err))
 		return false
 	}
 	mainModelPath, err := SecureJoin(modelDir, safeDirName+".gguf")
 	if err != nil {
-		fmt.Printf("❌ ERROR: %v\n", err)
+		ui.PrintError(fmt.Sprintf("%v", err))
 		return false
 	}
 
 	// Check if main model symlink already exists
 	if info, err := os.Lstat(mainModelPath); err == nil {
 		if info.Mode()&os.ModeSymlink == 0 {
-			fmt.Printf("⚠️  WARNING: %s exists but is NOT a symlink — skipping\n", mainModelPath)
+			ui.PrintWarning(fmt.Sprintf("%s exists but is NOT a symlink — skipping", mainModelPath))
 		} else {
-			fmt.Printf("⏭️  SKIPPED: %s (already exists)\n", model.Name)
+			ui.PrintInfo(fmt.Sprintf("SKIPPED: %s (already exists)", model.Name))
 		}
 		return false
 	}
 
-	fmt.Printf("🔗 CREATING: %s\n", model.Name)
+	ui.PrintInfo(fmt.Sprintf("CREATING: %s", model.Name))
 
 	if !dryRun {
 		// Create model directory
 		if err := os.MkdirAll(modelDir, 0755); err != nil {
-			fmt.Printf("❌ ERROR: Could not create directory for %s: %v\n", model.Name, err)
+			ui.PrintError(fmt.Sprintf("Could not create directory for %s: %v", model.Name, err))
 			return false
 		}
 
@@ -116,45 +117,45 @@ func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, d
 		blobFilename := strings.Replace(model.MainModelBlob, ":", "-", 1)
 		sourcePath, err := SecureJoin(filepath.Join(ollamaDir, "blobs"), blobFilename)
 		if err != nil {
-			fmt.Printf("❌ ERROR: unsafe blob path from digest %q: %v\n", model.MainModelBlob, err)
+			ui.PrintError(fmt.Sprintf("unsafe blob path from digest %q: %v", model.MainModelBlob, err))
 			return false
 		}
 		if err := os.Symlink(sourcePath, mainModelPath); err != nil {
-			fmt.Printf("❌ ERROR: Could not create symlink for %s: %v\n", model.Name, err)
+			ui.PrintError(fmt.Sprintf("Could not create symlink for %s: %v", model.Name, err))
 			return false
 		}
 
 		if verbose {
-			fmt.Printf("  ✅ Main model: %s -> %s\n", mainModelPath, sourcePath)
+			ui.PrintSuccess(fmt.Sprintf("Main model: %s -> %s", mainModelPath, sourcePath))
 		}
 
 		// Create additional component symlinks (e.g., projector for llava)
 		for blobHash, filename := range model.AdditionalBlobs {
 			additionalPath, err := SecureJoin(modelDir, filename)
 			if err != nil {
-				fmt.Printf("⚠️  Warning: %v\n", err)
+				ui.PrintWarning(fmt.Sprintf("%v", err))
 				continue
 			}
 			// Convert digest format from "sha256:hash" to "sha256-hash" for blob filename
 			blobFilename := strings.Replace(blobHash, ":", "-", 1)
 			additionalSource, err := SecureJoin(filepath.Join(ollamaDir, "blobs"), blobFilename)
 			if err != nil {
-				fmt.Printf("⚠️  Warning: unsafe additional blob path %q: %v\n", blobHash, err)
+				ui.PrintWarning(fmt.Sprintf("unsafe additional blob path %q: %v", blobHash, err))
 				continue
 			}
 
 			// Skip if already exists
 			if _, err := os.Lstat(additionalPath); err == nil {
 				if verbose {
-					fmt.Printf("  ⏭️  Additional component %s already exists\n", filename)
+					ui.PrintInfo(fmt.Sprintf("Additional component %s already exists", filename))
 				}
 				continue
 			}
 
 			if err := os.Symlink(additionalSource, additionalPath); err != nil {
-				fmt.Printf("⚠️  Warning: Could not create additional symlink %s: %v\n", filename, err)
+				ui.PrintWarning(fmt.Sprintf("Could not create additional symlink %s: %v", filename, err))
 			} else if verbose {
-				fmt.Printf("  ✅ Additional: %s -> %s\n", additionalPath, additionalSource)
+				ui.PrintSuccess(fmt.Sprintf("Additional: %s -> %s", additionalPath, additionalSource))
 			}
 		}
 	} else {
@@ -162,10 +163,10 @@ func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, d
 		blobFilename := strings.Replace(model.MainModelBlob, ":", "-", 1)
 		sourcePath, err := SecureJoin(filepath.Join(ollamaDir, "blobs"), blobFilename)
 		if err != nil {
-			fmt.Printf("❌ ERROR: unsafe blob path for dry run: %v\n", err)
+			ui.PrintError(fmt.Sprintf("unsafe blob path for dry run: %v", err))
 			return false
 		}
-		fmt.Printf("  Would create: %s -> %s\n", mainModelPath, sourcePath)
+		ui.PrintMuted(fmt.Sprintf("Would create: %s -> %s", mainModelPath, sourcePath))
 
 		for blobHash, filename := range model.AdditionalBlobs {
 			additionalPath := filepath.Join(modelDir, filename)
@@ -174,7 +175,7 @@ func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, d
 			if err != nil {
 				continue
 			}
-			fmt.Printf("  Would create: %s -> %s\n", additionalPath, additionalSource)
+			ui.PrintMuted(fmt.Sprintf("Would create: %s -> %s", additionalPath, additionalSource))
 		}
 	}
 
@@ -182,29 +183,29 @@ func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, d
 }
 
 func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix string, dryRun, verbose bool) bool {
-	fmt.Printf("🔗 PROCESSING: %s\n", model.Name)
+	ui.PrintInfo(fmt.Sprintf("PROCESSING: %s", model.Name))
 	
 	if verbose {
-		fmt.Printf("  📄 File: %s\n", model.Path)
+		ui.PrintMuted(fmt.Sprintf("File: %s", model.Path))
 	}
 
 	// 1. Calculate SHA256
 	if verbose {
-		fmt.Print("  🧮 Calculating SHA256... ")
+		ui.PrintMuted("Calculating SHA256...")
 	}
 	hash, err := CalculateSHA256(model.Path)
 	if err != nil {
-		fmt.Printf("❌ ERROR: Could not calculate hash: %v\n", err)
+		ui.PrintError(fmt.Sprintf("Could not calculate hash: %v", err))
 		return false
 	}
 	if verbose {
-		fmt.Printf("done: %s\n", hash)
+		ui.PrintMuted(fmt.Sprintf("done: %s", hash))
 	}
 
 	blobFilename := "sha256-" + hash
 	blobPath, err := SecureJoin(filepath.Join(ollamaDir, "blobs"), blobFilename)
 	if err != nil {
-		fmt.Printf("❌ ERROR: %v\n", err)
+		ui.PrintError(fmt.Sprintf("%v", err))
 		return false
 	}
 
@@ -212,32 +213,32 @@ func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix stri
 	if !dryRun {
 		// Ensure blobs directory exists
 		if err := os.MkdirAll(filepath.Join(ollamaDir, "blobs"), 0755); err != nil {
-			fmt.Printf("❌ ERROR: Could not create blobs directory: %v\n", err)
+			ui.PrintError(fmt.Sprintf("Could not create blobs directory: %v", err))
 			return false
 		}
 
 		if info, err := os.Lstat(blobPath); err != nil {
 			if os.IsNotExist(err) {
 				if err := os.Symlink(model.Path, blobPath); err != nil {
-					fmt.Printf("❌ ERROR: Could not create symlink in blobs: %v\n", err)
+					ui.PrintError(fmt.Sprintf("Could not create symlink in blobs: %v", err))
 					return false
 				}
 				if verbose {
-					fmt.Printf("  ✅ Created blob symlink: %s\n", blobPath)
+					ui.PrintSuccess(fmt.Sprintf("Created blob symlink: %s", blobPath))
 				}
 			} else {
-				fmt.Printf("❌ ERROR: Could not access blob path: %v\n", err)
+				ui.PrintError(fmt.Sprintf("Could not access blob path: %v", err))
 				return false
 			}
 		} else {
 			if info.Mode()&os.ModeSymlink == 0 {
-				fmt.Printf("⚠️  WARNING: %s exists but is NOT a symlink — skipping\n", blobFilename)
+				ui.PrintWarning(fmt.Sprintf("%s exists but is NOT a symlink — skipping", blobFilename))
 			} else if verbose {
-				fmt.Printf("  ⏭️  Blob already exists: %s\n", blobFilename)
+				ui.PrintInfo(fmt.Sprintf("Blob already exists: %s", blobFilename))
 			}
 		}
 	} else {
-		fmt.Printf("  Would create blob symlink: %s -> %s\n", blobPath, model.Path)
+		ui.PrintMuted(fmt.Sprintf("Would create blob symlink: %s -> %s", blobPath, model.Path))
 	}
 
 	// 3. Register with Ollama using 'ollama create'
@@ -245,7 +246,7 @@ func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix stri
 		if !dryRun {
 		// Ensure model path doesn't contain newlines to prevent Modelfile injection
 		if strings.ContainsAny(model.Path, "\n\r") {
-			fmt.Printf("❌ ERROR: Invalid model path: contains newlines\n")
+			ui.PrintError("Invalid model path: contains newlines")
 			return false
 		}
 
@@ -253,7 +254,7 @@ func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix stri
 		modelfileContent := fmt.Sprintf("FROM %s\n", filepath.Clean(model.Path))
 		tmpModelfile, err := os.CreateTemp("", "Modelfile-*")
 		if err != nil {
-			fmt.Printf("❌ ERROR: Could not create temporary Modelfile: %v\n", err)
+			ui.PrintError(fmt.Sprintf("Could not create temporary Modelfile: %v", err))
 			return false
 		}
 		// Capture name immediately and clean it
@@ -261,13 +262,13 @@ func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix stri
 		defer os.Remove(tmpPath)
 
 		if _, err := tmpModelfile.WriteString(modelfileContent); err != nil {
-			fmt.Printf("❌ ERROR: Could not write to temporary Modelfile: %v\n", err)
+			ui.PrintError(fmt.Sprintf("Could not write to temporary Modelfile: %v", err))
 			return false
 		}
 		tmpModelfile.Close()
 
 		if verbose {
-			fmt.Printf("  🚀 Registering with Ollama as '%s'...\n", ollamaModelName)
+			ui.PrintInfo(fmt.Sprintf("Registering with Ollama as '%s'...", ollamaModelName))
 		}
 
 		// Ensure the model name is sanitized for safety
@@ -278,14 +279,14 @@ func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix stri
 		cmd := exec.Command("ollama", "create", safeModelName, "-f", tmpPath)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			fmt.Printf("❌ ERROR: 'ollama create' failed: %v\nOutput: %s\n", err, string(output))
+			ui.PrintError(fmt.Sprintf("'ollama create' failed: %v\nOutput: %s", err, string(output)))
 			return false
 		}
 		if verbose {
-			fmt.Printf("  ✅ Registered successfully\n")
+			ui.PrintSuccess("Registered successfully")
 		}
 	} else {
-		fmt.Printf("  Would register with Ollama as: %s\n", ollamaModelName)
+		ui.PrintMuted(fmt.Sprintf("Would register with Ollama as: %s", ollamaModelName))
 	}
 
 	return true
@@ -327,25 +328,25 @@ func RemoveSymlinks(paths []string, dryRun bool) (int, int) {
 	var removed, failed int
 	for _, path := range paths {
 		if dryRun {
-			fmt.Printf("  Would remove: %s\n", path)
+			ui.PrintMuted(fmt.Sprintf("Would remove: %s", path))
 			removed++
 			continue
 		}
 
 		info, err := os.Lstat(path)
 		if err != nil {
-			fmt.Printf("❌ ERROR: Could not stat %s: %v\n", path, err)
+			ui.PrintError(fmt.Sprintf("Could not stat %s: %v", path, err))
 			failed++
 			continue
 		}
 		if info.Mode()&os.ModeSymlink == 0 {
-			fmt.Printf("❌ ERROR: Refusing to remove non-symlink: %s\n", path)
+			ui.PrintError(fmt.Sprintf("Refusing to remove non-symlink: %s", path))
 			failed++
 			continue
 		}
 
 		if err := os.Remove(path); err != nil {
-			fmt.Printf("❌ ERROR: Could not remove %s: %v\n", path, err)
+			ui.PrintError(fmt.Sprintf("Could not remove %s: %v", path, err))
 			failed++
 		} else {
 			removed++

@@ -11,10 +11,12 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/charmbracelet/huh"
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/linking"
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/lmstudio"
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/models"
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/ollama"
+	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/ui"
 )
 
 // Version of the application
@@ -33,19 +35,24 @@ func main() {
 func runApp(args []string, stdin io.Reader) error {
 	fs := flag.NewFlagSet("ollama-symlinks", flag.ContinueOnError)
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "Usage of %s:\n", fs.Name())
-		fmt.Fprintf(fs.Output(), "\nFlags:\n")
+		ui.PrintHeader(fmt.Sprintf("Usage: %s [command] [flags]", fs.Name()))
+		ui.PrintEmptyLine()
+		
+		fmt.Println(ui.HeaderStyle.Render("Commands"))
+		fmt.Printf("  %-12s %s\n", "delete", "Interactively delete symlinks from Ollama or LM Studio")
+		fmt.Printf("  %-12s %s\n", "cleanup", "Auto-discover and remove broken symlinks")
+		ui.PrintEmptyLine()
+
+		fmt.Println(ui.HeaderStyle.Render("Flags"))
 		fs.VisitAll(func(f *flag.Flag) {
 			_, usage := flag.UnquoteUsage(f)
-			fmt.Fprintf(fs.Output(), "  --%s\t%s", f.Name, usage)
+			defaultText := ""
 			if f.DefValue != "" && f.DefValue != "false" {
-				fmt.Fprintf(fs.Output(), " (default %q)", f.DefValue)
+				defaultText = ui.MutedStyle.Render(fmt.Sprintf("(default: %q)", f.DefValue))
 			}
-			fmt.Fprint(fs.Output(), "\n")
+			fmt.Printf("  %-18s %s %s\n", "--"+f.Name, usage, defaultText)
 		})
-		fmt.Fprintf(fs.Output(), "\nCommands:\n")
-		fmt.Fprintf(fs.Output(), "  delete\tInteractively delete symlinks from Ollama or LM Studio\n")
-		fmt.Fprintf(fs.Output(), "\nRun '%s [command] --help' for more information on a command.\n", fs.Name())
+		ui.PrintEmptyLine()
 	}
 
 	// Command line flags
@@ -81,15 +88,19 @@ func runApp(args []string, stdin io.Reader) error {
 		// New FlagSet for delete subcommand
 		deleteFs := flag.NewFlagSet("delete", flag.ContinueOnError)
 		deleteFs.Usage = func() {
-			fmt.Fprintf(deleteFs.Output(), "Usage of %s %s:\n", fs.Name(), deleteFs.Name())
+			ui.PrintHeader(fmt.Sprintf("Usage: %s %s [flags]", fs.Name(), deleteFs.Name()))
+			ui.PrintEmptyLine()
+			
+			fmt.Println(ui.HeaderStyle.Render("Flags"))
 			deleteFs.VisitAll(func(f *flag.Flag) {
 				_, usage := flag.UnquoteUsage(f)
-				fmt.Fprintf(deleteFs.Output(), "  --%s\t%s", f.Name, usage)
+				defaultText := ""
 				if f.DefValue != "" && f.DefValue != "false" {
-					fmt.Fprintf(deleteFs.Output(), " (default %q)", f.DefValue)
+					defaultText = ui.MutedStyle.Render(fmt.Sprintf("(default: %q)", f.DefValue))
 				}
-				fmt.Fprint(deleteFs.Output(), "\n")
+				fmt.Printf("  %-14s %s %s\n", "--"+f.Name, usage, defaultText)
 			})
+			ui.PrintEmptyLine()
 		}
 		from := deleteFs.String("from", "", "Source to delete symlinks from (ollama or lmstudio)")
 		deleteDryRun := deleteFs.Bool("dry-run", *dryRun, "Show what would be deleted without actually removing them")
@@ -97,6 +108,11 @@ func runApp(args []string, stdin io.Reader) error {
 		
 		if err := deleteFs.Parse(remainingArgs[1:]); err != nil {
 			return err
+		}
+
+		if len(deleteFs.Args()) > 0 {
+			deleteFs.Usage()
+			return fmt.Errorf("unexpected argument: %s", deleteFs.Args()[0])
 		}
 
 		if *from == "" {
@@ -113,7 +129,36 @@ func runApp(args []string, stdin io.Reader) error {
 
 	if len(remainingArgs) > 0 {
 		if remainingArgs[0] == "cleanup" {
-			return runCleanup(*lmstudioDir, *dryRun, *verbose, stdin)
+			cleanupFs := flag.NewFlagSet("cleanup", flag.ContinueOnError)
+			cleanupFs.Usage = func() {
+				ui.PrintHeader(fmt.Sprintf("Usage: %s %s [flags]", fs.Name(), cleanupFs.Name()))
+				ui.PrintEmptyLine()
+				
+				fmt.Println(ui.HeaderStyle.Render("Flags"))
+				cleanupFs.VisitAll(func(f *flag.Flag) {
+					_, usage := flag.UnquoteUsage(f)
+					defaultText := ""
+					if f.DefValue != "" && f.DefValue != "false" {
+						defaultText = ui.MutedStyle.Render(fmt.Sprintf("(default: %q)", f.DefValue))
+					}
+					fmt.Printf("  %-14s %s %s\n", "--"+f.Name, usage, defaultText)
+				})
+				ui.PrintEmptyLine()
+			}
+			
+			cleanupDryRun := cleanupFs.Bool("dry-run", *dryRun, "Show what would be deleted without actually removing them")
+			cleanupVerbose := cleanupFs.Bool("verbose", *verbose, "Enable verbose output")
+			
+			if err := cleanupFs.Parse(remainingArgs[1:]); err != nil {
+				return err
+			}
+			
+			if len(cleanupFs.Args()) > 0 {
+				cleanupFs.Usage()
+				return fmt.Errorf("unexpected argument: %s", cleanupFs.Args()[0])
+			}
+			
+			return runCleanup(*lmstudioDir, *cleanupDryRun, *cleanupVerbose, stdin)
 		}
 
 		// Unknown command
@@ -193,68 +238,74 @@ func runDelete(from, ollamaDir, lmstudioDir, skipProvider string, dryRun, verbos
 		return fmt.Errorf("target directory for deletion does not exist: %s", targetDir)
 	}
 
-	fmt.Printf("🔍 Scanning for symlinks in: %s\n", targetDir)
+	ui.PrintSubheader("Scanning for symlinks in: " + targetDir)
 	links, err := linking.ListSymlinks(targetDir)
 	if err != nil {
 		return fmt.Errorf("could not list symlinks: %w", err)
 	}
 
 	if len(links) == 0 {
-		fmt.Printf("✅ No symbolic links found in %s\n", targetDir)
+		ui.PrintSuccess("No symbolic links found in " + targetDir)
 		return nil
 	}
 
-	fmt.Printf("📦 Found %d symbolic links:\n", len(links))
-	for i, link := range links {
-		fmt.Printf("  %d) %s -> %s\n", i+1, link.Name, link.Target)
+	ui.PrintInfo(fmt.Sprintf("Found %d symbolic links:", len(links)))
+	for _, link := range links {
+		ui.PrintBullet(fmt.Sprintf("%s -> %s", link.Name, link.Target))
 	}
-	fmt.Println()
+	ui.PrintEmptyLine()
 
-	fmt.Print("📝 Enter numbers to delete (e.g. 1, 2, 5) or 'all' (or 'q' to quit): ")
-	var input string
-	fmt.Fscanln(stdin, &input)
-
-	if input == "q" || input == "" {
-		fmt.Println("👋 Cancelled")
-		return nil
+	var options []huh.Option[string]
+	for _, link := range links {
+		options = append(options, huh.NewOption[string](link.Name, link.Path))
 	}
 
 	var toDelete []string
-	if input == "all" {
-		for _, link := range links {
-			toDelete = append(toDelete, link.Path)
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewMultiSelect[string]().
+				Title("Select symlinks to delete").
+				Description("Use Space to toggle, Enter to confirm").
+				Options(options...).
+				Value(&toDelete),
+		),
+	)
+
+	err = form.Run()
+	if err != nil {
+		if errors.Is(err, huh.ErrUserAborted) {
+			ui.PrintInfo("Cancelled")
+			return nil
 		}
-	} else {
-		// Parse comma-separated numbers
-		parts := strings.Split(input, ",")
-		for _, p := range parts {
-			var idx int
-			_, err := fmt.Sscanf(strings.TrimSpace(p), "%d", &idx)
-			if err != nil || idx < 1 || idx > len(links) {
-				fmt.Printf("⚠️  Skipping invalid selection: %s\n", p)
-				continue
-			}
-			toDelete = append(toDelete, links[idx-1].Path)
-		}
+		return err
 	}
 
 	if len(toDelete) == 0 {
-		fmt.Println("🤷 No valid items selected for deletion")
+		ui.PrintWarning("No valid items selected for deletion")
 		return nil
 	}
 
 	if !dryRun {
-		fmt.Printf("⚠️  Are you sure you want to delete %d symlinks? (y/n): ", len(toDelete))
-		var confirm string
-		fmt.Fscanln(stdin, &confirm)
-		if strings.ToLower(confirm) != "y" {
-			fmt.Println("👋 Cancelled")
+		var confirm bool
+		err = huh.NewConfirm().
+			Title(fmt.Sprintf("Are you sure you want to delete %d symlinks?", len(toDelete))).
+			Affirmative("Yes").
+			Negative("No").
+			Value(&confirm).
+			Run()
+
+		if err != nil || !confirm {
+			ui.PrintInfo("Cancelled")
 			return nil
 		}
 	}
 
 	removed, failed := linking.RemoveSymlinks(toDelete, dryRun)
-	fmt.Printf("\n✅ Summary: %d removed, %d failed\n", removed, failed)
+	fmt.Println(ui.FormatSummary(
+		ui.HeaderStyle.Render("Results"),
+		fmt.Sprintf("Removed: %d", removed),
+		fmt.Sprintf("Failed:  %d", failed),
+	))
 	return nil
 }
 
@@ -265,7 +316,7 @@ func runDeleteOllama(ollamaDir string, dryRun, verbose bool, stdin io.Reader) er
 		return fmt.Errorf("target directory for deletion does not exist: %s (manifests not found)", ollamaDir)
 	}
 
-	fmt.Printf("🔍 Scanning Ollama models for symlinks...\n")
+	ui.PrintSubheader("Scanning Ollama models for symlinks...")
 	allModels, err := ollama.DiscoverModels(ollamaDir, verbose)
 	if err != nil {
 		return fmt.Errorf("could not discover models: %w", err)
@@ -288,12 +339,12 @@ func runDeleteOllama(ollamaDir string, dryRun, verbose bool, stdin io.Reader) er
 	}
 
 	if len(symlinkedModels) == 0 {
-		fmt.Println("✅ No symlinked models found in Ollama")
+		ui.PrintSuccess("No symlinked models found in Ollama")
 		return nil
 	}
 
-	fmt.Printf("📦 Found %d symlinked models in Ollama:\n", len(symlinkedModels))
-	for i, m := range symlinkedModels {
+	ui.PrintInfo(fmt.Sprintf("Found %d symlinked models in Ollama:", len(symlinkedModels)))
+	for _, m := range symlinkedModels {
 		blobFilename := strings.Replace(m.MainModelBlob, ":", "-", 1)
 		targetPath, err := linking.SecureJoin(filepath.Join(ollamaDir, "blobs"), blobFilename)
 		
@@ -305,46 +356,62 @@ func runDeleteOllama(ollamaDir string, dryRun, verbose bool, stdin io.Reader) er
 				target = "(missing blob)"
 			}
 		}
-		fmt.Printf("  %d) %s -> %s\n", i+1, m.Name, target)
+		ui.PrintBullet(fmt.Sprintf("%s -> %s", m.Name, target))
 	}
-	fmt.Println()
+	ui.PrintEmptyLine()
 
-	fmt.Print("📝 Enter numbers to delete (e.g. 1, 2, 5) or 'all' (or 'q' to quit): ")
-	var input string
-	fmt.Fscanln(stdin, &input)
+	var options []huh.Option[string]
+	for _, m := range symlinkedModels {
+		options = append(options, huh.NewOption[string](m.Name, m.Name))
+	}
 
-	if input == "q" || input == "" {
-		fmt.Println("👋 Cancelled")
+	var toDeleteNames []string
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewMultiSelect[string]().
+				Title("Select models to delete").
+				Description("Use Space to toggle, Enter to confirm").
+				Options(options...).
+				Value(&toDeleteNames),
+		),
+	)
+
+	err = form.Run()
+	if err != nil {
+		if errors.Is(err, huh.ErrUserAborted) {
+			ui.PrintInfo("Cancelled")
+			return nil
+		}
+		return err
+	}
+
+	if len(toDeleteNames) == 0 {
+		ui.PrintWarning("No valid items selected for deletion")
 		return nil
 	}
 
+	// Map names back to ModelInfo
 	var toDelete []models.ModelInfo
-	if input == "all" {
-		toDelete = symlinkedModels
-	} else {
-		parts := strings.Split(input, ",")
-		for _, p := range parts {
-			var idx int
-			_, err := fmt.Sscanf(strings.TrimSpace(p), "%d", &idx)
-			if err != nil || idx < 1 || idx > len(symlinkedModels) {
-				fmt.Printf("⚠️  Skipping invalid selection: %s\n", p)
-				continue
+	for _, name := range toDeleteNames {
+		for _, m := range symlinkedModels {
+			if m.Name == name {
+				toDelete = append(toDelete, m)
+				break
 			}
-			toDelete = append(toDelete, symlinkedModels[idx-1])
 		}
 	}
 
-	if len(toDelete) == 0 {
-		fmt.Println("🤷 No valid items selected for deletion")
-		return nil
-	}
-
 	if !dryRun {
-		fmt.Printf("⚠️  Are you sure you want to delete %d models from Ollama? (y/n): ", len(toDelete))
-		var confirm string
-		fmt.Fscanln(stdin, &confirm)
-		if strings.ToLower(confirm) != "y" {
-			fmt.Println("👋 Cancelled")
+		var confirm bool
+		err = huh.NewConfirm().
+			Title(fmt.Sprintf("Are you sure you want to delete %d models from Ollama?", len(toDelete))).
+			Affirmative("Yes").
+			Negative("No").
+			Value(&confirm).
+			Run()
+
+		if err != nil || !confirm {
+			ui.PrintInfo("Cancelled")
 			return nil
 		}
 	}
@@ -352,22 +419,20 @@ func runDeleteOllama(ollamaDir string, dryRun, verbose bool, stdin io.Reader) er
 	var removed, failed int
 	for _, m := range toDelete {
 		if dryRun {
-			fmt.Printf("  Would remove: %s\n", m.Name)
+			ui.PrintMuted(fmt.Sprintf("Would remove: %s", m.Name))
 			removed++
 			continue
 		}
 
 		if verbose {
-			fmt.Printf("  🚀 Deleting %s via 'ollama rm'...\n", m.Name)
+			ui.PrintMuted(fmt.Sprintf("Deleting %s via 'ollama rm'...", m.Name))
 		}
 		
 		// Use 'ollama rm' to properly clean up manifest and blob links
 		importPath := m.Name
 		// Validate model name to prevent accidental flag interpretation
-		// Note that some models might have namespaces like "library/llama2:latest", 
-		// but the discover logic extracts it currently as "name:variant"
 		if matched, _ := regexp.MatchString(`^[a-zA-Z0-9._-]+:[a-zA-Z0-9._-]+$`, importPath); !matched {
-			fmt.Printf("❌ ERROR: Refusing to run 'ollama rm' with unsafe model name: %q\n", importPath)
+			ui.PrintError(fmt.Sprintf("Refusing to run 'ollama rm' with unsafe model name: %q", importPath))
 			failed++
 			continue
 		}
@@ -375,24 +440,30 @@ func runDeleteOllama(ollamaDir string, dryRun, verbose bool, stdin io.Reader) er
 		cmd := exec.Command("ollama", "rm", importPath)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			fmt.Printf("❌ ERROR: 'ollama rm %s' failed: %v\nOutput: %s\n", importPath, err, string(output))
+			ui.PrintError(fmt.Sprintf("'ollama rm %s' failed: %v\nOutput: %s", importPath, err, string(output)))
 			failed++
 		} else {
 			removed++
 		}
 	}
 
-	fmt.Printf("\n✅ Summary: %d removed, %d failed\n", removed, failed)
+	fmt.Println(ui.FormatSummary(
+		ui.HeaderStyle.Render("Results"),
+		fmt.Sprintf("Removed: %d", removed),
+		fmt.Sprintf("Failed:  %d", failed),
+	))
 	return nil
 }
 
 func runForward(ollamaDir, lmstudioDir string, dryRun, verbose bool) error {
-	fmt.Printf("🔍 Scanning Ollama models in: %s\n", ollamaDir)
-	fmt.Printf("🎯 Target LM Studio directory: %s\n", lmstudioDir)
+	ui.PrintHeader("Ollama → LM Studio Linker")
+	ui.PrintInfo(fmt.Sprintf("Ollama directory: %s", ollamaDir))
+	ui.PrintInfo(fmt.Sprintf("Target LM Studio directory: %s", lmstudioDir))
+
 	if dryRun {
-		fmt.Println("🧪 DRY RUN MODE - No changes will be made")
+		ui.PrintWarning("DRY RUN MODE - No changes will be made")
 	}
-	fmt.Println()
+	ui.PrintEmptyLine()
 
 	// Discover models
 	models, err := ollama.DiscoverModels(ollamaDir, verbose)
@@ -401,15 +472,15 @@ func runForward(ollamaDir, lmstudioDir string, dryRun, verbose bool) error {
 	}
 
 	if len(models) == 0 {
-		fmt.Println("❌ No models found in Ollama directory")
+		ui.PrintError("No models found in Ollama directory")
 		return nil
 	}
 
-	fmt.Printf("📦 Found %d models:\n", len(models))
+	ui.PrintSubheader(fmt.Sprintf("Found %d models", len(models)))
 	for _, model := range models {
-		fmt.Printf("  • %s\n", model.Name)
+		ui.PrintBullet(model.Name)
 	}
-	fmt.Println()
+	ui.PrintEmptyLine()
 
 	// Create ollama provider directory
 	ollamaProviderDir := filepath.Join(lmstudioDir, "ollama")
@@ -431,21 +502,26 @@ func runForward(ollamaDir, lmstudioDir string, dryRun, verbose bool) error {
 	}
 
 	// Summary
-	fmt.Println()
-	fmt.Printf("✅ Summary: %d created, %d skipped\n", created, skipped)
+	fmt.Println(ui.FormatSummary(
+		ui.HeaderStyle.Render("Results"),
+		fmt.Sprintf("Linked:  %d", created),
+		fmt.Sprintf("Skipped: %d", skipped),
+	))
+	
 	if created > 0 && !dryRun {
-		fmt.Printf("🎉 Models are now available in LM Studio under the 'ollama' provider\n")
+		ui.PrintSuccess("Models are now available in LM Studio under the 'ollama' provider")
 	}
 	return nil
 }
 
 func runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider string, dryRun, verbose bool) error {
-	fmt.Printf("🔍 Scanning LM Studio models in: %s\n", lmstudioDir)
-	fmt.Printf("🎯 Target Ollama directory: %s\n", ollamaDir)
+	ui.PrintHeader("LM Studio → Ollama Linker")
+	ui.PrintInfo(fmt.Sprintf("LM Studio directory: %s", lmstudioDir))
+	ui.PrintInfo(fmt.Sprintf("Target Ollama directory: %s", ollamaDir))
 	if dryRun {
-		fmt.Println("🧪 DRY RUN MODE - No changes will be made")
+		ui.PrintWarning("DRY RUN MODE - No changes will be made")
 	}
-	fmt.Println()
+	ui.PrintEmptyLine()
 
 	// Discover models
 	models, err := lmstudio.DiscoverLMStudioModels(lmstudioDir, skipProvider, verbose)
@@ -454,15 +530,15 @@ func runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider string, dryRun,
 	}
 
 	if len(models) == 0 {
-		fmt.Println("❌ No eligible models found in LM Studio directory")
+		ui.PrintError("No eligible models found in LM Studio directory")
 		return nil
 	}
 
-	fmt.Printf("📦 Found %d eligible models:\n", len(models))
+	ui.PrintSubheader(fmt.Sprintf("Found %d eligible models", len(models)))
 	for _, model := range models {
-		fmt.Printf("  • %s (%s)\n", model.Name, model.Path)
+		ui.PrintBullet(fmt.Sprintf("%s (%s)", model.Name, model.Path))
 	}
-	fmt.Println()
+	ui.PrintEmptyLine()
 
 	// Process each model
 	var created, skipped int
@@ -476,10 +552,14 @@ func runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider string, dryRun,
 	}
 
 	// Summary
-	fmt.Println()
-	fmt.Printf("✅ Summary: %d created, %d skipped\n", created, skipped)
+	fmt.Println(ui.FormatSummary(
+		ui.HeaderStyle.Render("Results"),
+		fmt.Sprintf("Linked:  %d", created),
+		fmt.Sprintf("Skipped: %d", skipped),
+	))
+	
 	if created > 0 && !dryRun {
-		fmt.Printf("🎉 Models are now available in Ollama with the '%s-' prefix\n", namePrefix)
+		ui.PrintSuccess(fmt.Sprintf("Models are now available in Ollama with the '%s-' prefix", namePrefix))
 	}
 	return nil
 }
@@ -489,37 +569,42 @@ func runCleanup(lmstudioDir string, dryRun, verbose bool, stdin io.Reader) error
 	
 	// Check if target dir exists
 	if _, err := os.Stat(targetDir); os.IsNotExist(err) {
-		fmt.Printf("✅ No managed 'ollama' directory found in LM Studio. Nothing to clean.\n")
+		ui.PrintSuccess("No managed 'ollama' directory found in LM Studio. Nothing to clean.")
 		return nil
 	}
 
-	fmt.Printf("🔍 Scanning for broken symlinks in: %s\n", targetDir)
+	ui.PrintSubheader("Scanning for broken symlinks in: " + targetDir)
 	brokenLinks, err := linking.FindBrokenSymlinks(targetDir)
 	if err != nil {
 		return fmt.Errorf("could not search for broken symlinks: %w", err)
 	}
 
 	if len(brokenLinks) == 0 {
-		fmt.Printf("✅ No broken symbolic links found.\n")
+		ui.PrintSuccess("No broken symbolic links found.")
 		return nil
 	}
 
-	fmt.Printf("📦 Found %d broken symbolic links (targets are missing):\n", len(brokenLinks))
-	for i, link := range brokenLinks {
-		fmt.Printf("  %d) %s -> %s\n", i+1, link.Path, link.Target)
+	ui.PrintInfo(fmt.Sprintf("Found %d broken symbolic links (targets are missing):", len(brokenLinks)))
+	for _, link := range brokenLinks {
+		ui.PrintBullet(fmt.Sprintf("%s -> %s", link.Path, link.Target))
 	}
-	fmt.Println()
+	ui.PrintEmptyLine()
 
 	if dryRun {
-		fmt.Println("🧪 DRY RUN MODE - No items will be removed.")
+		ui.PrintWarning("DRY RUN MODE - No items will be removed.")
 		return nil
 	}
 
-	fmt.Printf("⚠️  Are you sure you want to delete these %d broken symlinks? (y/n): ", len(brokenLinks))
-	var confirm string
-	fmt.Fscanln(stdin, &confirm)
-	if strings.ToLower(confirm) != "y" {
-		fmt.Println("👋 Cancelled")
+	var confirm bool
+	err = huh.NewConfirm().
+		Title(fmt.Sprintf("Are you sure you want to delete these %d broken symlinks?", len(brokenLinks))).
+		Affirmative("Yes").
+		Negative("No").
+		Value(&confirm).
+		Run()
+
+	if err != nil || !confirm {
+		ui.PrintInfo("Cancelled")
 		return nil
 	}
 
@@ -529,12 +614,16 @@ func runCleanup(lmstudioDir string, dryRun, verbose bool, stdin io.Reader) error
 	}
 
 	removed, failed := linking.RemoveSymlinks(paths, false)
-	fmt.Printf("\n✅ Summary: %d removed, %d failed\n", removed, failed)
+	fmt.Println(ui.FormatSummary(
+		ui.HeaderStyle.Render("Results"),
+		fmt.Sprintf("Removed: %d", removed),
+		fmt.Sprintf("Failed:  %d", failed),
+	))
 	
 	// Try to remove empty directories
 	if removed > 0 {
 		if verbose {
-			fmt.Println("📂 Cleaning up empty model directories...")
+			ui.PrintMuted("Cleaning up empty model directories...")
 		}
 		entries, err := os.ReadDir(targetDir)
 		if err == nil {
@@ -545,7 +634,7 @@ func runCleanup(lmstudioDir string, dryRun, verbose bool, stdin io.Reader) error
 					if files, err := os.ReadDir(dirPath); err == nil && len(files) == 0 {
 						os.Remove(dirPath)
 						if verbose {
-							fmt.Printf("  🗑️  Removed empty directory: %s\n", entry.Name())
+							ui.PrintMuted(fmt.Sprintf("Removed empty directory: %s", entry.Name()))
 						}
 					}
 				}

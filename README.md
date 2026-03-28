@@ -92,6 +92,17 @@ Safely remove symlinks created by this tool without touching the original model 
 ./ollama-symlinks delete --from ollama
 ```
 
+#### 4. Auto-discover and Cleanup Broken Symlinks
+If you delete an Ollama model directly using `ollama rm`, the symlinks in LM Studio may become broken. The `cleanup` command scans and helps you safely remove these broken ghost-links.
+
+```bash
+# Preview broken symlinks without deleting
+./ollama-symlinks cleanup --dry-run
+
+# Interactively remove broken symlinks
+./ollama-symlinks cleanup
+```
+
 ### ⚙️ Command Line Arguments
 
 | Flag | Type | Default | Description |
