@@ -52,6 +52,13 @@ get_latest_version() {
         # Fallback to a default if API fails (could also be hardcoded or fetched from elsewhere)
         VERSION="v0.2.1" 
     fi
+
+    # Validate version string to prevent URL injection
+    if ! echo "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
+        log_error "Invalid version string received: $VERSION"
+        exit 1
+    fi
+
     echo "$VERSION"
 }
 
@@ -83,6 +90,33 @@ install() {
         log_error "Failed to download binary from $DOWNLOAD_URL"
         exit 1
     fi
+
+    # Fetch and verify checksum
+    local CHECKSUM_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${VERSION}/checksums.txt"
+    log_info "Verifying binary checksum..."
+    local EXPECTED_CHECKSUM
+    EXPECTED_CHECKSUM=$(curl -sL "${CHECKSUM_URL}" | grep "${BINARY_NAME}-${SYSTEM_INFO}" | awk '{print $1}')
+    
+    if [ -z "$EXPECTED_CHECKSUM" ]; then
+        log_error "Could not find expected checksum for ${SYSTEM_INFO} in checksums.txt"
+        exit 1
+    fi
+
+    local ACTUAL_CHECKSUM
+    if command -v sha256sum >/dev/null 2>&1; then
+        ACTUAL_CHECKSUM=$(sha256sum "${TMP_DIR}/${BINARY_NAME}" | awk '{print $1}')
+    elif command -v shasum >/dev/null 2>&1; then
+        ACTUAL_CHECKSUM=$(shasum -a 256 "${TMP_DIR}/${BINARY_NAME}" | awk '{print $1}')
+    else
+        log_error "Neither sha256sum nor shasum found to verify binary integrity."
+        exit 1
+    fi
+
+    if [ "$EXPECTED_CHECKSUM" != "$ACTUAL_CHECKSUM" ]; then
+        log_error "Checksum mismatch! Binary may be corrupted or tampered with."
+        exit 1
+    fi
+    log_info "Checksum verified successfully."
 
     # Make executable
     chmod +x "${TMP_DIR}/${BINARY_NAME}"
