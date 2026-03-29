@@ -159,8 +159,17 @@ func TestRemoveSymlinks(t *testing.T) {
 	linkPath := filepath.Join(tempDir, "link.txt")
 	os.Symlink(realFile, linkPath)
 
+	// Test trying to remove a non-symlink
+	removed, failed := RemoveSymlinks([]string{realFile}, false)
+	if removed != 0 || failed != 1 {
+		t.Errorf("Non-symlink: expected 0 removed, 1 failed, got %d/%d", removed, failed)
+	}
+	if _, err := os.Stat(realFile); os.IsNotExist(err) {
+		t.Error("Real file was accidentally deleted!")
+	}
+
 	// Test dry run
-	removed, failed := RemoveSymlinks([]string{linkPath}, true)
+	removed, failed = RemoveSymlinks([]string{linkPath}, true)
 	if removed != 1 || failed != 0 {
 		t.Errorf("Dry run: expected 1 removed, 0 failed, got %d/%d", removed, failed)
 	}
@@ -205,5 +214,35 @@ func TestSecureJoin(t *testing.T) {
 				t.Errorf("SecureJoin(%s, %s) error = %v, wantErr %v", base, tt.input, err, tt.wantErr)
 			}
 		})
+	}
+}
+func TestFindBrokenSymlinks(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// 1. Create a real file
+	realFile := filepath.Join(tempDir, "real.txt")
+	os.WriteFile(realFile, []byte("data"), 0644)
+
+	// 2. Create a valid symlink
+	validLink := filepath.Join(tempDir, "valid.link")
+	os.Symlink(realFile, validLink)
+
+	// 3. Create a broken symlink
+	brokenLink := filepath.Join(tempDir, "broken.link")
+	os.Symlink(filepath.Join(tempDir, "missing.txt"), brokenLink)
+
+	// 4. Run discovery
+	broken, err := FindBrokenSymlinks(tempDir)
+	if err != nil {
+		t.Fatalf("FindBrokenSymlinks failed: %v", err)
+	}
+
+	// Should find exactly 1 broken link
+	if len(broken) != 1 {
+		t.Fatalf("Expected 1 broken link, got %d", len(broken))
+	}
+
+	if broken[0].Path != brokenLink {
+		t.Errorf("Expected broken link path %s, got %s", brokenLink, broken[0].Path)
 	}
 }

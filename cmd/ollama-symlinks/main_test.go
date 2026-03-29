@@ -56,6 +56,12 @@ func TestRunApp_Validation(t *testing.T) {
 			wantErr:     true,
 			errContains: "directory for deletion does not exist",
 		},
+		{
+			name:        "Unknown subcommand",
+			args:        []string{"help"},
+			wantErr:     true,
+			errContains: "unknown command \"help\"",
+		},
 	}
 
 	for _, tt := range tests {

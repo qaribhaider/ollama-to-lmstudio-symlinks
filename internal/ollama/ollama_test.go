@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/models"
 )
 
 func TestGetDefaultDirs(t *testing.T) {
+	// Test default behavior
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatalf("Failed to get user home dir: %v", err)
@@ -19,6 +21,68 @@ func TestGetDefaultDirs(t *testing.T) {
 	expectedOllama := filepath.Join(home, ".ollama", "models")
 	if ollamaDir != expectedOllama {
 		t.Errorf("Expected ollama dir %s, got %s", expectedOllama, ollamaDir)
+	}
+
+	// Test OLLAMA_MODELS env var
+	customPath := filepath.Join(t.TempDir(), "custom", "ollama", "models")
+	os.MkdirAll(customPath, 0755)
+	os.Setenv("OLLAMA_MODELS", customPath)
+	defer os.Unsetenv("OLLAMA_MODELS")
+
+	ollamaDir = GetDefaultOllamaDir()
+	if ollamaDir != customPath {
+		t.Errorf("Expected custom ollama dir %s, got %s", customPath, ollamaDir)
+	}
+}
+
+func TestGetOllamaCandidates(t *testing.T) {
+	tempDir := t.TempDir()
+	
+	// Create mock directories
+	path1 := filepath.Join(tempDir, "opt1")
+	path2 := filepath.Join(tempDir, "opt2")
+	os.MkdirAll(path1, 0755)
+	os.MkdirAll(path2, 0755)
+
+	// Set env var to point to one of them
+	os.Setenv("OLLAMA_MODELS", path1)
+	defer os.Unsetenv("OLLAMA_MODELS")
+
+	candidates := GetOllamaCandidates()
+	
+	foundPath1 := false
+	for _, c := range candidates {
+		if c == path1 {
+			foundPath1 = true
+			break
+		}
+	}
+	if !foundPath1 {
+		t.Errorf("Expected to find %s in candidates, but it was missing", path1)
+	}
+}
+
+func TestValidateDigest(t *testing.T) {
+	valid64 := strings.Repeat("a", 64)
+	tests := []struct {
+		name    string
+		digest  string
+		wantErr bool
+	}{
+		{"Valid", "sha256:" + valid64, false},
+		{"Missing prefix", valid64, true},
+		{"Wrong prefix", "md5:" + valid64, true},
+		{"Too short", "sha256:abc", true},
+		{"Invalid chars", "sha256:" + strings.Repeat("Z", 64), true},
+		{"Path Traversal", "sha256:../../etc/passwd", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := ValidateDigest(tt.digest); (err != nil) != tt.wantErr {
+				t.Errorf("ValidateDigest(%q) error = %v, wantErr %v", tt.digest, err, tt.wantErr)
+			}
+		})
 	}
 }
 
@@ -42,11 +106,11 @@ func TestDiscoverModels(t *testing.T) {
 	}{
 		{
 			MediaType: "application/vnd.ollama.image.model",
-			Digest:    "sha256:12345abcdef",
+			Digest:    "sha256:" + strings.Repeat("1", 64),
 		},
 		{
 			MediaType: "application/vnd.ollama.image.projector",
-			Digest:    "sha256:fedcba54321",
+			Digest:    "sha256:" + strings.Repeat("2", 64),
 		},
 	}
 	manifestData, err := json.Marshal(manifest)
@@ -78,12 +142,12 @@ func TestDiscoverModels(t *testing.T) {
 	if model.Name != expectedName {
 		t.Errorf("Expected model name %s, got %s", expectedName, model.Name)
 	}
-	if model.MainModelBlob != "sha256:12345abcdef" {
-		t.Errorf("Expected main model blob sha256:12345abcdef, got %s", model.MainModelBlob)
+	if model.MainModelBlob != "sha256:"+strings.Repeat("1", 64) {
+		t.Errorf("Expected main model blob sha256:111..., got %s", model.MainModelBlob)
 	}
 	// Projector name uses - instead of :
 	expectedProjectorName := "test-model-latest-projector.bin"
-	if model.AdditionalBlobs["sha256:fedcba54321"] != expectedProjectorName {
-		t.Errorf("Expected projector name %s, got %s", expectedProjectorName, model.AdditionalBlobs["sha256:fedcba54321"])
+	if model.AdditionalBlobs["sha256:"+strings.Repeat("2", 64)] != expectedProjectorName {
+		t.Errorf("Expected projector name %s, got %s", expectedProjectorName, model.AdditionalBlobs["sha256:"+strings.Repeat("2", 64)])
 	}
 }

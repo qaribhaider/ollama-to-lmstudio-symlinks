@@ -7,6 +7,7 @@ import (
 )
 
 func TestGetDefaultDirs(t *testing.T) {
+	// Test default behavior
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatalf("Failed to get user home dir: %v", err)
@@ -16,6 +17,53 @@ func TestGetDefaultDirs(t *testing.T) {
 	expectedLMStudio := filepath.Join(home, ".cache", "lm-studio", "models")
 	if lmStudioDir != expectedLMStudio {
 		t.Errorf("Expected LM Studio dir %s, got %s", expectedLMStudio, lmStudioDir)
+	}
+
+	// Test LMSTUDIO_MODELS env var
+	customPath := filepath.Join(t.TempDir(), "custom", "lm-studio", "models")
+	os.MkdirAll(customPath, 0755)
+	os.Setenv("LMSTUDIO_MODELS", customPath)
+	defer os.Unsetenv("LMSTUDIO_MODELS")
+
+	lmStudioDir = GetDefaultLMStudioDir()
+	if lmStudioDir != customPath {
+		t.Errorf("Expected custom LM Studio dir %s, got %s", customPath, lmStudioDir)
+	}
+}
+
+func TestGetLMStudioCandidates(t *testing.T) {
+	tempDir := t.TempDir()
+	
+	// Create mock directories
+	path1 := filepath.Join(tempDir, "opt1")
+	path2 := filepath.Join(tempDir, "opt2")
+	os.MkdirAll(path1, 0755)
+	os.MkdirAll(path2, 0755)
+
+	// Set env var to point to one of them
+	os.Setenv("LMSTUDIO_MODELS", path1)
+	defer os.Unsetenv("LMSTUDIO_MODELS")
+
+	candidates := GetLMStudioCandidates()
+	
+	foundPath1 := false
+	for _, c := range candidates {
+		if c == path1 {
+			foundPath1 = true
+			break
+		}
+	}
+	if !foundPath1 {
+		t.Errorf("Expected to find %s in candidates, but it was missing", path1)
+	}
+
+	// Test unsafe path rejection
+	os.Setenv("LMSTUDIO_MODELS", "/")
+	candidates = GetLMStudioCandidates()
+	for _, c := range candidates {
+		if c == "/" || c == `\` {
+			t.Errorf("Unsafe path %s was not rejected!", c)
+		}
 	}
 }
 
