@@ -75,7 +75,7 @@ jobs:
 
       - name: Generate checksums
         run: |
-          find . -name "ollama-symlinks-*" -type f -exec sha256sum {} \; > checksums.txt
+          find . -name "ollama-symlinks-*" -type f -exec sha256sum {} \; | sed 's|  .*/|  |' > checksums.txt
           cat checksums.txt
 
       - name: Read VERSION file
@@ -111,6 +111,7 @@ jobs:
             ollama-symlinks --version
             ```
           files: |
+            checksums.txt
             binaries-ubuntu-latest-amd64/ollama-symlinks-linux-amd64
             binaries-ubuntu-latest-arm64/ollama-symlinks-linux-arm64
             binaries-macos-latest-amd64/ollama-symlinks-macos-amd64

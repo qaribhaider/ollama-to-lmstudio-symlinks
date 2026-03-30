@@ -49,8 +49,8 @@ get_latest_version() {
     fi
 
     if [ -z "$VERSION" ]; then
-        # Fallback to a default if API fails (could also be hardcoded or fetched from elsewhere)
-        VERSION="v0.2.1" 
+        # Fallback to the current stable version if API fails (useful for local runs or rate limits)
+        VERSION="v0.3.1" 
     fi
 
     # Validate version string to prevent URL injection

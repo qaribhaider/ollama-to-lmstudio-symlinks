@@ -54,7 +54,7 @@ The version is stored in the `VERSION` file. To update the version:
 make update-version
 
 # Or manually
-echo "v0.3.0" > VERSION
+echo "v0.3.1" > VERSION
 ```
 
 After updating the version, commit the changes and push to trigger a new release.
