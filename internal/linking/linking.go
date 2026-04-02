@@ -209,18 +209,45 @@ func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix stri
 		return false
 	}
 
+	// 2. Warn if source file might be inaccessible to system Ollama
+	if os.PathSeparator == '/' && strings.HasPrefix(ollamaDir, "/var/lib/ollama") {
+		// Naive check: if parent or file isn't at least group-executable/readable
+		// Just a friendly heads-up to the user
+		if info, err := os.Stat(model.Path); err == nil {
+			if info.Mode()&0004 == 0 { // Not world-readable
+				ui.PrintWarning(fmt.Sprintf("Note: %s is not world-readable. Ensure the 'ollama' service user has permission to read it.", filepath.Base(model.Path)))
+			}
+		}
+	}
+
 	// 2. Create symlink in blobs if it doesn't exist
 	if !dryRun {
 		// Ensure blobs directory exists
 		if err := os.MkdirAll(filepath.Join(ollamaDir, "blobs"), 0755); err != nil {
-			ui.PrintError(fmt.Sprintf("Could not create blobs directory: %v", err))
+			if os.IsPermission(err) && strings.HasPrefix(ollamaDir, "/var/lib/ollama") {
+				ui.PrintError(fmt.Sprintf("Permission denied creating directory in %s: %v\n\n"+
+					"It looks like you're using a system Ollama installation. Ensure the directory is writable by the 'ollama' group:\n\n"+
+					"  sudo chgrp -R ollama %s\n"+
+					"  sudo chmod -R g+w %s", ollamaDir, err, ollamaDir, ollamaDir))
+			} else {
+				ui.PrintError(fmt.Sprintf("Could not create blobs directory: %v", err))
+			}
 			return false
 		}
 
 		if info, err := os.Lstat(blobPath); err != nil {
 			if os.IsNotExist(err) {
 				if err := os.Symlink(model.Path, blobPath); err != nil {
-					ui.PrintError(fmt.Sprintf("Could not create symlink in blobs: %v", err))
+					if os.IsPermission(err) && strings.HasPrefix(ollamaDir, "/var/lib/ollama") {
+						ui.PrintError(fmt.Sprintf("Permission denied creating symlink in blobs: %v\n\n"+
+							"It looks like you're using a system Ollama installation. To allow symlinking without sudo, "+
+							"ensure your user is in the 'ollama' group and the directory has group write permissions:\n\n"+
+							"  sudo chgrp -R ollama %s\n"+
+							"  sudo chmod -R g+w %s\n\n"+
+							"If you just added yourself to the group, you may need to logout and login again.", err, ollamaDir, ollamaDir))
+					} else {
+						ui.PrintError(fmt.Sprintf("Could not create symlink in blobs: %v", err))
+					}
 					return false
 				}
 				if verbose {

@@ -57,6 +57,11 @@ func GetOllamaCandidates() []string {
 		candidates = append(candidates, filepath.Join(home, ".ollama", "models"))
 	}
 
+	// 3. Linux system-wide install (e.g. Arch Linux)
+	if os.PathSeparator == '/' && os.Getenv("OS") != "Windows_NT" {
+		candidates = append(candidates, "/var/lib/ollama/.ollama/models")
+	}
+
 	// 3. Windows-specific locations
 	if os.Getenv("OS") == "Windows_NT" || os.PathSeparator == '\\' {
 		// LocalAppData
