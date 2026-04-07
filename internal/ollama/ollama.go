@@ -143,10 +143,10 @@ func DiscoverModels(ollamaDir string, verbose bool) ([]models.ModelInfo, error) 
 				return fmt.Errorf("invalid layer in %s: %w", path, err)
 			}
 
-			switch layer.MediaType {
-			case "application/vnd.ollama.image.model":
+			switch {
+			case strings.HasPrefix(layer.MediaType, "application/vnd.ollama.image.model"):
 				modelInfo.MainModelBlob = layer.Digest
-			case "application/vnd.ollama.image.projector":
+			case layer.MediaType == "application/vnd.ollama.image.projector":
 				// For multimodal models like llava
 				// Ensure filename is safe for filesystem
 				safeProjectorName := strings.Replace(fullModelName, ":", "-", -1)
@@ -156,7 +156,10 @@ func DiscoverModels(ollamaDir string, verbose bool) ([]models.ModelInfo, error) 
 		}
 
 		if modelInfo.MainModelBlob == "" {
-			return fmt.Errorf("no main model blob found for %s", fullModelName)
+			if verbose {
+				fmt.Printf("⚠️  Skipping %s: no main model blob found (unsupported media type or sharded model)\n", fullModelName)
+			}
+			return nil
 		}
 
 		discoveredModels = append(discoveredModels, modelInfo)

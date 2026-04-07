@@ -151,3 +151,61 @@ func TestDiscoverModels(t *testing.T) {
 		t.Errorf("Expected projector name %s, got %s", expectedProjectorName, model.AdditionalBlobs["sha256:"+strings.Repeat("2", 64)])
 	}
 }
+
+func TestDiscoverModelsResilience(t *testing.T) {
+	tempDir := t.TempDir()
+	manifestsDir := filepath.Join(tempDir, "manifests")
+
+	// 1. Create a valid MLX manifest
+	mlxModelName := "mlx-model"
+	mlxModelDir := filepath.Join(manifestsDir, "registry.ollama.ai", "library", mlxModelName)
+	os.MkdirAll(mlxModelDir, 0755)
+	
+	mlxManifest := models.OllamaManifest{}
+	mlxManifest.Layers = []struct {
+		MediaType string `json:"mediaType"`
+		Digest    string `json:"digest"`
+		Size      int64  `json:"size"`
+	}{
+		{
+			MediaType: "application/vnd.ollama.image.model.mlx",
+			Digest:    "sha256:" + strings.Repeat("3", 64),
+		},
+	}
+	mlxData, _ := json.Marshal(mlxManifest)
+	os.WriteFile(filepath.Join(mlxModelDir, "latest"), mlxData, 0644)
+
+	// 2. Create an invalid model manifest (no model weights)
+	invalidModelName := "invalid-model"
+	invalidModelDir := filepath.Join(manifestsDir, "registry.ollama.ai", "library", invalidModelName)
+	os.MkdirAll(invalidModelDir, 0755)
+	
+	invalidManifest := models.OllamaManifest{}
+	invalidManifest.Layers = []struct {
+		MediaType string `json:"mediaType"`
+		Digest    string `json:"digest"`
+		Size      int64  `json:"size"`
+	}{
+		{
+			MediaType: "application/vnd.ollama.image.template",
+			Digest:    "sha256:" + strings.Repeat("4", 64),
+		},
+	}
+	invalidData, _ := json.Marshal(invalidManifest)
+	os.WriteFile(filepath.Join(invalidModelDir, "latest"), invalidData, 0644)
+
+	// Run directory discovery
+	discoveredModels, err := DiscoverModels(tempDir, false)
+	if err != nil {
+		t.Fatalf("DiscoverModels failed: %v", err)
+	}
+
+	// Should have only 1 model (mlx-model). invalid-model should be skipped.
+	if len(discoveredModels) != 1 {
+		t.Fatalf("Expected exactly 1 model to be discovered, got %d", len(discoveredModels))
+	}
+
+	if discoveredModels[0].Name != "mlx-model:latest" {
+		t.Errorf("Expected mlx-model:latest, got %s", discoveredModels[0].Name)
+	}
+}
