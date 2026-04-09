@@ -63,6 +63,8 @@ func runApp(args []string, stdin io.Reader) error {
 	var deepScan = fs.Bool("deep-scan", false, "Scan all Windows drives for model directories (fallback)")
 	var showVersion = fs.Bool("version", false, "Show version information")
 
+	var useHardlinks = fs.Bool("hardlinks", false, "Use hard links instead of symlinks (fixes '0 bytes' issue on Windows)")
+
 	// Reverse mode flags
 	var reverse = fs.Bool("reverse", false, "Link LM Studio models to Ollama (reverse mode)")
 	var namePrefix = fs.String("name-prefix", "lms", "Prefix for models created in Ollama")
@@ -211,7 +213,7 @@ func runApp(args []string, stdin io.Reader) error {
 		if _, err := os.Stat(*lmstudioDir); os.IsNotExist(err) {
 			return fmt.Errorf("LM Studio directory does not exist: %s. Use --lmstudio-dir or --deep-scan to help find it.", *lmstudioDir)
 		}
-		if err := runReverse(*lmstudioDir, *ollamaDir, *namePrefix, *skipProvider, *dryRun, *verbose); err != nil {
+		if err := runReverse(*lmstudioDir, *ollamaDir, *namePrefix, *skipProvider, *dryRun, *verbose, *useHardlinks); err != nil {
 			return err
 		}
 	} else {
@@ -219,7 +221,7 @@ func runApp(args []string, stdin io.Reader) error {
 		if _, err := os.Stat(*ollamaDir); os.IsNotExist(err) {
 			return fmt.Errorf("Ollama directory does not exist: %s. Use --ollama-dir or --deep-scan to help find it.", *ollamaDir)
 		}
-		if err := runForward(*ollamaDir, *lmstudioDir, *dryRun, *verbose); err != nil {
+		if err := runForward(*ollamaDir, *lmstudioDir, *dryRun, *verbose, *useHardlinks); err != nil {
 			return err
 		}
 	}
@@ -330,9 +332,16 @@ func runDeleteOllama(ollamaDir string, dryRun, verbose bool, stdin io.Reader) er
 		blobPath := filepath.Join(ollamaDir, "blobs", blobFilename)
 		
 		info, err := os.Lstat(blobPath)
-		if err == nil && info.Mode()&os.ModeSymlink != 0 {
-			symlinkedModels = append(symlinkedModels, m)
-		} else if os.IsNotExist(err) && strings.HasPrefix(m.Name, "lms-") {
+		isOurModel := strings.HasPrefix(m.Name, "lms-") || strings.HasPrefix(m.Name, "lms:")
+		
+		if err == nil {
+			if info.Mode()&os.ModeSymlink != 0 {
+				symlinkedModels = append(symlinkedModels, m)
+			} else if info.Mode().IsRegular() && isOurModel {
+				// Regular file but with our prefix - likely a hard link
+				symlinkedModels = append(symlinkedModels, m)
+			}
+		} else if os.IsNotExist(err) && isOurModel {
 			// Also include broken models (ghosts) if they have our prefix
 			symlinkedModels = append(symlinkedModels, m)
 		}
@@ -455,7 +464,7 @@ func runDeleteOllama(ollamaDir string, dryRun, verbose bool, stdin io.Reader) er
 	return nil
 }
 
-func runForward(ollamaDir, lmstudioDir string, dryRun, verbose bool) error {
+func runForward(ollamaDir, lmstudioDir string, dryRun, verbose, useHardlinks bool) error {
 	ui.PrintHeader("Ollama → LM Studio Linker")
 	ui.PrintInfo(fmt.Sprintf("Ollama directory: %s", ollamaDir))
 	ui.PrintInfo(fmt.Sprintf("Target LM Studio directory: %s", lmstudioDir))
@@ -493,7 +502,7 @@ func runForward(ollamaDir, lmstudioDir string, dryRun, verbose bool) error {
 	// Process each model
 	var created, skipped int
 	for _, model := range models {
-		result := linking.ProcessModel(model, ollamaDir, ollamaProviderDir, dryRun, verbose)
+		result := linking.ProcessModel(model, ollamaDir, ollamaProviderDir, dryRun, verbose, useHardlinks)
 		if result {
 			created++
 		} else {
@@ -514,7 +523,7 @@ func runForward(ollamaDir, lmstudioDir string, dryRun, verbose bool) error {
 	return nil
 }
 
-func runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider string, dryRun, verbose bool) error {
+func runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider string, dryRun, verbose, useHardlinks bool) error {
 	ui.PrintHeader("LM Studio → Ollama Linker")
 	ui.PrintInfo(fmt.Sprintf("LM Studio directory: %s", lmstudioDir))
 	ui.PrintInfo(fmt.Sprintf("Target Ollama directory: %s", ollamaDir))
@@ -543,7 +552,7 @@ func runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider string, dryRun,
 	// Process each model
 	var created, skipped int
 	for _, model := range models {
-		result := linking.ProcessLMStudioModel(model, ollamaDir, namePrefix, dryRun, verbose)
+		result := linking.ProcessLMStudioModel(model, ollamaDir, namePrefix, dryRun, verbose, useHardlinks)
 		if result {
 			created++
 		} else {

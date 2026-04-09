@@ -57,7 +57,7 @@ func TestProcessModel(t *testing.T) {
 	providerDir := filepath.Join(lmstudioDir, "ollama")
 
 	// 3. Process the model normally
-	result := ProcessModel(model, ollamaDir, providerDir, false, false)
+	result := ProcessModel(model, ollamaDir, providerDir, false, false, false)
 	if !result {
 		t.Fatal("ProcessModel returned false, expected true to indicate successful creation")
 	}
@@ -97,7 +97,7 @@ func TestProcessLMStudioModelDryRun(t *testing.T) {
 	os.WriteFile(mockFile, []byte("data"), 0644)
 	model.Path = mockFile
 
-	result := ProcessLMStudioModel(model, ollamaDir, "lms", true, false)
+	result := ProcessLMStudioModel(model, ollamaDir, "lms", true, false, false)
 	if !result {
 		t.Fatal("ProcessLMStudioModel dry run failed")
 	}
@@ -135,9 +135,9 @@ func TestListSymlinks(t *testing.T) {
 		t.Fatalf("ListSymlinks failed: %v", err)
 	}
 
-	// Should find 2 symlinks
-	if len(links) != 2 {
-		t.Fatalf("Expected 2 symlinks, got %d", len(links))
+	// Should find 3 items (1 real file/hard link, 2 symlinks)
+	if len(links) != 3 {
+		t.Fatalf("Expected 3 items, got %d", len(links))
 	}
 
 	// Verify names
@@ -145,27 +145,29 @@ func TestListSymlinks(t *testing.T) {
 	for _, l := range links {
 		names[l.Name] = true
 	}
-	if !names["link.txt"] || !names["sublink.txt"] {
-		t.Errorf("Did not find expected symlink names: %v", names)
+	if !names["link.txt"] || !names["sublink.txt"] || !names["real.txt"] {
+		t.Errorf("Did not find expected names: %v", names)
 	}
 }
 
 func TestRemoveSymlinks(t *testing.T) {
 	tempDir := t.TempDir()
 	
-	// Create real file and symlink
+	// Create real file, symlink, and a directory
 	realFile := filepath.Join(tempDir, "real.txt")
 	os.WriteFile(realFile, []byte("data"), 0644)
 	linkPath := filepath.Join(tempDir, "link.txt")
 	os.Symlink(realFile, linkPath)
+	dirPath := filepath.Join(tempDir, "a_directory")
+	os.Mkdir(dirPath, 0755)
 
-	// Test trying to remove a non-symlink
-	removed, failed := RemoveSymlinks([]string{realFile}, false)
+	// Test trying to remove a directory (should fail as non-link/non-file)
+	removed, failed := RemoveSymlinks([]string{dirPath}, false)
 	if removed != 0 || failed != 1 {
-		t.Errorf("Non-symlink: expected 0 removed, 1 failed, got %d/%d", removed, failed)
+		t.Errorf("Directory expected 0 removed, 1 failed, got %d/%d", removed, failed)
 	}
-	if _, err := os.Stat(realFile); os.IsNotExist(err) {
-		t.Error("Real file was accidentally deleted!")
+	if _, err := os.Stat(dirPath); os.IsNotExist(err) {
+		t.Error("Directory was accidentally deleted!")
 	}
 
 	// Test dry run

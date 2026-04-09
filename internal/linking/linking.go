@@ -79,7 +79,18 @@ func CalculateSHA256(filePath string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, dryRun, verbose bool) bool {
+func createLink(source, target string, forceHardlink bool) error {
+	if forceHardlink {
+		if err := os.Link(source, target); err == nil {
+			return nil
+		}
+		// Fallback to symlink if hard link fails (e.g. cross-device)
+		return os.Symlink(source, target)
+	}
+	return os.Symlink(source, target)
+}
+
+func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, dryRun, verbose, useHardlinks bool) bool {
 	// Sanitize name for directory usage (replace : with - for tags)
 	safeDirName := strings.Replace(model.Name, ":", "-", -1)
 	modelDir, err := SecureJoin(ollamaProviderDir, safeDirName)
@@ -112,7 +123,7 @@ func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, d
 			return false
 		}
 
-		// Create main model symlink
+		// Create main model link
 		// Convert digest format from "sha256:hash" to "sha256-hash" for blob filename
 		blobFilename := strings.Replace(model.MainModelBlob, ":", "-", 1)
 		sourcePath, err := SecureJoin(filepath.Join(ollamaDir, "blobs"), blobFilename)
@@ -120,13 +131,17 @@ func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, d
 			ui.PrintError(fmt.Sprintf("unsafe blob path from digest %q: %v", model.MainModelBlob, err))
 			return false
 		}
-		if err := os.Symlink(sourcePath, mainModelPath); err != nil {
-			ui.PrintError(fmt.Sprintf("Could not create symlink for %s: %v", model.Name, err))
+		if err := createLink(sourcePath, mainModelPath, useHardlinks); err != nil {
+			ui.PrintError(fmt.Sprintf("Could not create link for %s: %v", model.Name, err))
 			return false
 		}
 
 		if verbose {
-			ui.PrintSuccess(fmt.Sprintf("Main model: %s -> %s", mainModelPath, sourcePath))
+			linkType := "symlink"
+			if useHardlinks {
+				linkType = "hard link"
+			}
+			ui.PrintSuccess(fmt.Sprintf("Main model (%s): %s -> %s", linkType, mainModelPath, sourcePath))
 		}
 
 		// Create additional component symlinks (e.g., projector for llava)
@@ -152,10 +167,14 @@ func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, d
 				continue
 			}
 
-			if err := os.Symlink(additionalSource, additionalPath); err != nil {
-				ui.PrintWarning(fmt.Sprintf("Could not create additional symlink %s: %v", filename, err))
+			if err := createLink(additionalSource, additionalPath, useHardlinks); err != nil {
+				ui.PrintWarning(fmt.Sprintf("Could not create additional link %s: %v", filename, err))
 			} else if verbose {
-				ui.PrintSuccess(fmt.Sprintf("Additional: %s -> %s", additionalPath, additionalSource))
+				linkType := "symlink"
+				if useHardlinks {
+					linkType = "hard link"
+				}
+				ui.PrintSuccess(fmt.Sprintf("Additional (%s): %s -> %s", linkType, additionalPath, additionalSource))
 			}
 		}
 	} else {
@@ -182,7 +201,7 @@ func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, d
 	return true
 }
 
-func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix string, dryRun, verbose bool) bool {
+func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix string, dryRun, verbose, useHardlinks bool) bool {
 	ui.PrintInfo(fmt.Sprintf("PROCESSING: %s", model.Name))
 	
 	if verbose {
@@ -237,21 +256,25 @@ func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix stri
 
 		if info, err := os.Lstat(blobPath); err != nil {
 			if os.IsNotExist(err) {
-				if err := os.Symlink(model.Path, blobPath); err != nil {
+				if err := createLink(model.Path, blobPath, useHardlinks); err != nil {
 					if os.IsPermission(err) && strings.HasPrefix(ollamaDir, "/var/lib/ollama") {
-						ui.PrintError(fmt.Sprintf("Permission denied creating symlink in blobs: %v\n\n"+
-							"It looks like you're using a system Ollama installation. To allow symlinking without sudo, "+
+						ui.PrintError(fmt.Sprintf("Permission denied creating link in blobs: %v\n\n"+
+							"It looks like you're using a system Ollama installation. To allow linking without sudo, "+
 							"ensure your user is in the 'ollama' group and the directory has group write permissions:\n\n"+
 							"  sudo chgrp -R ollama %s\n"+
 							"  sudo chmod -R g+w %s\n\n"+
 							"If you just added yourself to the group, you may need to logout and login again.", err, ollamaDir, ollamaDir))
 					} else {
-						ui.PrintError(fmt.Sprintf("Could not create symlink in blobs: %v", err))
+						ui.PrintError(fmt.Sprintf("Could not create link in blobs: %v", err))
 					}
 					return false
 				}
 				if verbose {
-					ui.PrintSuccess(fmt.Sprintf("Created blob symlink: %s", blobPath))
+					linkType := "symlink"
+					if useHardlinks {
+						linkType = "hard link"
+					}
+					ui.PrintSuccess(fmt.Sprintf("Created blob %s: %s", linkType, blobPath))
 				}
 			} else {
 				ui.PrintError(fmt.Sprintf("Could not access blob path: %v", err))
@@ -332,11 +355,16 @@ func ListSymlinks(dir string) ([]SymlinkInfo, error) {
 			return err
 		}
 
-		// Only look for symbolic links
-		if d.Type()&os.ModeSymlink != 0 {
-			target, err := os.Readlink(path)
-			if err != nil {
-				return nil // Skip if we can't read it
+		// Look for symbolic links or regular files (could be hard links)
+		if d.Type()&os.ModeSymlink != 0 || d.Type().IsRegular() {
+			target := ""
+			if d.Type()&os.ModeSymlink != 0 {
+				target, err = os.Readlink(path)
+				if err != nil {
+					return nil // Skip if we can't read it
+				}
+			} else {
+				target = "(file or hard link)"
 			}
 
 			symlinks = append(symlinks, SymlinkInfo{
@@ -366,8 +394,9 @@ func RemoveSymlinks(paths []string, dryRun bool) (int, int) {
 			failed++
 			continue
 		}
-		if info.Mode()&os.ModeSymlink == 0 {
-			ui.PrintError(fmt.Sprintf("Refusing to remove non-symlink: %s", path))
+		// Allow removing symlinks or regular files
+		if info.Mode()&os.ModeSymlink == 0 && !info.Mode().IsRegular() {
+			ui.PrintError(fmt.Sprintf("Refusing to remove non-link/non-file: %s", path))
 			failed++
 			continue
 		}

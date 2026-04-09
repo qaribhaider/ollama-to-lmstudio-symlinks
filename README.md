@@ -112,6 +112,7 @@ If you delete an Ollama model directly using `ollama rm`, the symlinks in LM Stu
 | `--reverse` | `bool` | `false` | Enable **Reverse Mode**: Link models from LM Studio → Ollama. |
 | `--name-prefix` | `string` | `lms` | Prefix used for naming models when importing into Ollama. |
 | `--skip-provider` | `string` | `ollama` | Folder name in LM Studio where symlinks are created. |
+| `--hardlinks` | `bool` | `false` | Use hard links instead of symlinks. Fixes "0 bytes" or "failed to load" issues on Windows. |
 | `--dry-run` | `bool` | `false` | Show logs of what would happen without making changes. |
 | `--verbose` | `bool` | `false` | Enable detailed logging of the process. |
 | `--version` | `bool` | `false` | Display the current version of the utility. |
@@ -154,6 +155,22 @@ If you delete an Ollama model directly using `ollama rm`, the symlinks in LM Stu
 ### "Permission denied" on Windows
 
 Run the command prompt as Administrator when creating symlinks on Windows.
+
+### "Failed to load model" or models showing as "0 bytes" in LM Studio (Windows)
+
+Recent versions of LM Studio or strict Windows configurations may block standard symbolic links from loading. To fix this, switch to hard links:
+
+1. **First, delete the broken/0-byte symlinks:**
+```bash
+./ollama-symlinks delete --from lmstudio
+```
+
+2. **Then, re-run the tool using the `--hardlinks` flag:**
+```bash
+./ollama-symlinks --hardlinks
+```
+
+**⚠️ Important Note on Space:** Hard links are identical to regular files. If you run `ollama rm <model>` to clear disk space, the space **won't actually be freed** until you also delete the linked file from LM Studio using `ollama-symlinks delete --from lmstudio`.
 
 ### Models not appearing in LM Studio
 
