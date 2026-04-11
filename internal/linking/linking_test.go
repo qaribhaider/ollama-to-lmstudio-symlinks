@@ -47,7 +47,7 @@ func TestProcessModel(t *testing.T) {
 	// Define our parsed ModelInfo
 	model := models.ModelInfo{
 		Name:          "test-model-latest",
-		MainModelBlob: "sha256:blob11111",
+		MainModelBlobs: []string{"sha256:blob11111"},
 		AdditionalBlobs: map[string]string{
 			"sha256:blob22222": "test-model-latest-projector.bin",
 		},

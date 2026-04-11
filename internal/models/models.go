@@ -19,7 +19,7 @@ type OllamaManifest struct {
 // ModelInfo holds information about a discovered model
 type ModelInfo struct {
 	Name            string
-	MainModelBlob   string
+	MainModelBlobs  []string
 	AdditionalBlobs map[string]string // blob_hash -> suggested_filename
 }
 

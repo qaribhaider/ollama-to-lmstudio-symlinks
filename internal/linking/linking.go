@@ -123,25 +123,40 @@ func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, d
 			return false
 		}
 
-		// Create main model link
-		// Convert digest format from "sha256:hash" to "sha256-hash" for blob filename
-		blobFilename := strings.Replace(model.MainModelBlob, ":", "-", 1)
-		sourcePath, err := SecureJoin(filepath.Join(ollamaDir, "blobs"), blobFilename)
-		if err != nil {
-			ui.PrintError(fmt.Sprintf("unsafe blob path from digest %q: %v", model.MainModelBlob, err))
-			return false
-		}
-		if err := createLink(sourcePath, mainModelPath, useHardlinks); err != nil {
-			ui.PrintError(fmt.Sprintf("Could not create link for %s: %v", model.Name, err))
-			return false
-		}
-
-		if verbose {
-			linkType := "symlink"
-			if useHardlinks {
-				linkType = "hard link"
+		// Create main model link(s)
+		for i, blobDigest := range model.MainModelBlobs {
+			// Convert digest format from "sha256:hash" to "sha256-hash" for blob filename
+			blobFilename := strings.Replace(blobDigest, ":", "-", 1)
+			sourcePath, err := SecureJoin(filepath.Join(ollamaDir, "blobs"), blobFilename)
+			if err != nil {
+				ui.PrintError(fmt.Sprintf("unsafe blob path from digest %q: %v", blobDigest, err))
+				return false
 			}
-			ui.PrintSuccess(fmt.Sprintf("Main model (%s): %s -> %s", linkType, mainModelPath, sourcePath))
+
+			destFilename := safeDirName + ".gguf"
+			if len(model.MainModelBlobs) > 1 {
+				// Use standard llama.cpp sharding convention: model-00001-of-00003.gguf
+				destFilename = fmt.Sprintf("%s-%05d-of-%05d.gguf", safeDirName, i+1, len(model.MainModelBlobs))
+			}
+			
+			linkPath, err := SecureJoin(modelDir, destFilename)
+			if err != nil {
+				ui.PrintError(fmt.Sprintf("unsafe link path for %s: %v", destFilename, err))
+				return false
+			}
+
+			if err := createLink(sourcePath, linkPath, useHardlinks); err != nil {
+				ui.PrintError(fmt.Sprintf("Could not create link for %s (part %d): %v", model.Name, i+1, err))
+				return false
+			}
+
+			if verbose {
+				linkType := "symlink"
+				if useHardlinks {
+					linkType = "hard link"
+				}
+				ui.PrintSuccess(fmt.Sprintf("Main model (%s part %d): %s -> %s", linkType, i+1, linkPath, sourcePath))
+			}
 		}
 
 		// Create additional component symlinks (e.g., projector for llava)
@@ -179,13 +194,21 @@ func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, d
 		}
 	} else {
 		// Dry run - just show what would be done
-		blobFilename := strings.Replace(model.MainModelBlob, ":", "-", 1)
-		sourcePath, err := SecureJoin(filepath.Join(ollamaDir, "blobs"), blobFilename)
-		if err != nil {
-			ui.PrintError(fmt.Sprintf("unsafe blob path for dry run: %v", err))
-			return false
+		for i, blobDigest := range model.MainModelBlobs {
+			blobFilename := strings.Replace(blobDigest, ":", "-", 1)
+			sourcePath, err := SecureJoin(filepath.Join(ollamaDir, "blobs"), blobFilename)
+			if err != nil {
+				ui.PrintError(fmt.Sprintf("unsafe blob path for dry run: %v", err))
+				return false
+			}
+			
+			destFilename := safeDirName + ".gguf"
+			if len(model.MainModelBlobs) > 1 {
+				destFilename = fmt.Sprintf("%s-%05d-of-%05d.gguf", safeDirName, i+1, len(model.MainModelBlobs))
+			}
+			linkPath, _ := SecureJoin(modelDir, destFilename)
+			ui.PrintMuted(fmt.Sprintf("Would create: %s -> %s", linkPath, sourcePath))
 		}
-		ui.PrintMuted(fmt.Sprintf("Would create: %s -> %s", mainModelPath, sourcePath))
 
 		for blobHash, filename := range model.AdditionalBlobs {
 			additionalPath := filepath.Join(modelDir, filename)

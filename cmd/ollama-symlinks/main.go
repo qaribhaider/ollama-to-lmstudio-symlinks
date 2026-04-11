@@ -326,9 +326,12 @@ func runDeleteOllama(ollamaDir string, dryRun, verbose bool, stdin io.Reader) er
 
 	var symlinkedModels []models.ModelInfo
 	for _, m := range allModels {
+		if len(m.MainModelBlobs) == 0 {
+			continue
+		}
 		// Check if the manifest uses a symlinked blob
 		// The blob filename is "sha256-hash" (no colon)
-		blobFilename := strings.Replace(m.MainModelBlob, ":", "-", 1)
+		blobFilename := strings.Replace(m.MainModelBlobs[0], ":", "-", 1)
 		blobPath := filepath.Join(ollamaDir, "blobs", blobFilename)
 		
 		info, err := os.Lstat(blobPath)
@@ -354,7 +357,10 @@ func runDeleteOllama(ollamaDir string, dryRun, verbose bool, stdin io.Reader) er
 
 	ui.PrintInfo(fmt.Sprintf("Found %d symlinked models in Ollama:", len(symlinkedModels)))
 	for _, m := range symlinkedModels {
-		blobFilename := strings.Replace(m.MainModelBlob, ":", "-", 1)
+		if len(m.MainModelBlobs) == 0 {
+			continue
+		}
+		blobFilename := strings.Replace(m.MainModelBlobs[0], ":", "-", 1)
 		targetPath, err := linking.SecureJoin(filepath.Join(ollamaDir, "blobs"), blobFilename)
 		
 		target := "(unsafe blob path)"

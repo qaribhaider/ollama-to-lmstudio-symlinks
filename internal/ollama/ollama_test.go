@@ -142,8 +142,8 @@ func TestDiscoverModels(t *testing.T) {
 	if model.Name != expectedName {
 		t.Errorf("Expected model name %s, got %s", expectedName, model.Name)
 	}
-	if model.MainModelBlob != "sha256:"+strings.Repeat("1", 64) {
-		t.Errorf("Expected main model blob sha256:111..., got %s", model.MainModelBlob)
+	if len(model.MainModelBlobs) == 0 || model.MainModelBlobs[0] != "sha256:"+strings.Repeat("1", 64) {
+		t.Errorf("Expected main model blob sha256:111..., got %v", model.MainModelBlobs)
 	}
 	// Projector name uses - instead of :
 	expectedProjectorName := "test-model-latest-projector.bin"
