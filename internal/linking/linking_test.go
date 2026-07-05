@@ -29,6 +29,53 @@ func TestCalculateSHA256(t *testing.T) {
 	}
 }
 
+func TestSanitizeModelName(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "keeps simple ollama name",
+			in:   "lms-publisher-model-q4-k-m",
+			want: "lms-publisher-model-q4-k-m",
+		},
+		{
+			name: "replaces underscores from lm studio quantization names",
+			in:   "lms-jiunsong-supergemma4-26b-uncensored-fast-v2-q4_k_m",
+			want: "lms-jiunsong-supergemma4-26b-uncensored-fast-v2-q4-k-m",
+		},
+		{
+			name: "collapses punctuation and trims separators",
+			in:   "--L3.2__8X3B MOE/Q4_K_S--",
+			want: "l3.2-8x3b-moe-q4-k-s",
+		},
+		{
+			name: "shortens long lm studio names for ollama parser",
+			in:   "lms-jiunsong-supergemma4-26b-uncensored-gguf-v2-supergemma4-26b-uncensored-fast-v2-q4_k_m",
+			want: "lms-jiunsong-supergemma4-26b-uncensored-gguf-v2-supergemma4-26b-uncenso-894c964c",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := SanitizeModelName(tt.in); got != tt.want {
+				t.Errorf("SanitizeModelName(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSanitizeModelNameLengthLimit(t *testing.T) {
+	got := SanitizeModelName("lms-davidau-llama-3-2-8x3b-moe-dark-champion-instruct-uncensored-abliterated-18-4b-gguf-l3-2-8x3b-moe-dark-champion-inst-18-4b-uncen-ablit_d_au-q4_k_s")
+	if len(got) > maxOllamaModelNameLength {
+		t.Fatalf("SanitizeModelName returned %d chars, want at most %d: %q", len(got), maxOllamaModelNameLength, got)
+	}
+	if got != "lms-davidau-llama-3-2-8x3b-moe-dark-champion-instruct-uncensored-ablite-d36bb606" {
+		t.Errorf("SanitizeModelName returned %q", got)
+	}
+}
+
 func TestProcessModel(t *testing.T) {
 	ollamaDir := t.TempDir()
 	lmstudioDir := t.TempDir()
@@ -46,7 +93,7 @@ func TestProcessModel(t *testing.T) {
 
 	// Define our parsed ModelInfo
 	model := models.ModelInfo{
-		Name:          "test-model-latest",
+		Name:           "test-model-latest",
 		MainModelBlobs: []string{"sha256:blob11111"},
 		AdditionalBlobs: map[string]string{
 			"sha256:blob22222": "test-model-latest-projector.bin",
@@ -86,7 +133,7 @@ func TestProcessModel(t *testing.T) {
 
 func TestProcessLMStudioModelDryRun(t *testing.T) {
 	ollamaDir := t.TempDir()
-	
+
 	model := models.LMStudioModel{
 		Name: "test-model",
 		Path: "/abs/path/to/model.gguf",
@@ -152,7 +199,7 @@ func TestListSymlinks(t *testing.T) {
 
 func TestRemoveSymlinks(t *testing.T) {
 	tempDir := t.TempDir()
-	
+
 	// Create real file, symlink, and a directory
 	realFile := filepath.Join(tempDir, "real.txt")
 	os.WriteFile(realFile, []byte("data"), 0644)
@@ -187,7 +234,7 @@ func TestRemoveSymlinks(t *testing.T) {
 	if _, err := os.Lstat(linkPath); !os.IsNotExist(err) {
 		t.Error("Actual removal failed to delete the symlink")
 	}
-	
+
 	// Verify real file still exists
 	if _, err := os.Stat(realFile); os.IsNotExist(err) {
 		t.Error("Real file was accidentally deleted!")
@@ -196,7 +243,7 @@ func TestRemoveSymlinks(t *testing.T) {
 
 func TestSecureJoin(t *testing.T) {
 	base := "/base/path"
-	
+
 	tests := []struct {
 		name    string
 		input   string

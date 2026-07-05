@@ -21,6 +21,8 @@ type SymlinkInfo struct {
 	Target string
 }
 
+const maxOllamaModelNameLength = 80
+
 // SecureJoin joins a base directory and a user-provided name,
 // preventing path traversal (Zip Slip) by ensuring the result
 // is within the base directory.
@@ -51,17 +53,32 @@ func SecureJoin(base, name string) (string, error) {
 }
 
 // SanitizeModelName ensures the model name only contains safe characters
-// for Ollama (alphanumeric, dots, dashes, underscores).
+// for Ollama (alphanumeric, dots, and dashes).
 func SanitizeModelName(name string) string {
 	var sb strings.Builder
+	lastWasSeparator := false
 	for _, r := range strings.ToLower(name) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '-' || r == '_' {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
 			sb.WriteRune(r)
-		} else {
-			sb.WriteRune('-') // Replace invalid chars with dash
+			lastWasSeparator = false
+		} else if (r == '.' || r == '-') && !lastWasSeparator {
+			sb.WriteRune(r)
+			lastWasSeparator = true
+		} else if !lastWasSeparator {
+			sb.WriteRune('-')
+			lastWasSeparator = true
 		}
 	}
-	return sb.String()
+	sanitized := strings.Trim(sb.String(), ".-")
+	if len(sanitized) <= maxOllamaModelNameLength {
+		return sanitized
+	}
+
+	hash := sha256.Sum256([]byte(sanitized))
+	suffix := hex.EncodeToString(hash[:])[:8]
+	prefixLength := maxOllamaModelNameLength - len(suffix) - 1
+	prefix := strings.Trim(sanitized[:prefixLength], ".-")
+	return prefix + "-" + suffix
 }
 
 func CalculateSHA256(filePath string) (string, error) {
@@ -138,7 +155,7 @@ func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, d
 				// Use standard llama.cpp sharding convention: model-00001-of-00003.gguf
 				destFilename = fmt.Sprintf("%s-%05d-of-%05d.gguf", safeDirName, i+1, len(model.MainModelBlobs))
 			}
-			
+
 			linkPath, err := SecureJoin(modelDir, destFilename)
 			if err != nil {
 				ui.PrintError(fmt.Sprintf("unsafe link path for %s: %v", destFilename, err))
@@ -201,7 +218,7 @@ func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, d
 				ui.PrintError(fmt.Sprintf("unsafe blob path for dry run: %v", err))
 				return false
 			}
-			
+
 			destFilename := safeDirName + ".gguf"
 			if len(model.MainModelBlobs) > 1 {
 				destFilename = fmt.Sprintf("%s-%05d-of-%05d.gguf", safeDirName, i+1, len(model.MainModelBlobs))
@@ -226,7 +243,7 @@ func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, d
 
 func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix string, dryRun, verbose, useHardlinks bool) bool {
 	ui.PrintInfo(fmt.Sprintf("PROCESSING: %s", model.Name))
-	
+
 	if verbose {
 		ui.PrintMuted(fmt.Sprintf("File: %s", model.Path))
 	}
@@ -315,8 +332,8 @@ func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix stri
 	}
 
 	// 3. Register with Ollama using 'ollama create'
-	ollamaModelName := fmt.Sprintf("%s-%s", namePrefix, model.Name)
-		if !dryRun {
+	ollamaModelName := SanitizeModelName(fmt.Sprintf("%s-%s", namePrefix, model.Name))
+	if !dryRun {
 		// Ensure model path doesn't contain newlines to prevent Modelfile injection
 		if strings.ContainsAny(model.Path, "\n\r") {
 			ui.PrintError("Invalid model path: contains newlines")
@@ -344,12 +361,9 @@ func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix stri
 			ui.PrintInfo(fmt.Sprintf("Registering with Ollama as '%s'...", ollamaModelName))
 		}
 
-		// Ensure the model name is sanitized for safety
-		safeModelName := SanitizeModelName(ollamaModelName)
-
-		// G204: both safeModelName and tmpPath are sanitized/cleaned.
+		// G204: both ollamaModelName and tmpPath are sanitized/cleaned.
 		// Go's exec.Command passes arguments directly to OS, preventing shell injection.
-		cmd := exec.Command("ollama", "create", safeModelName, "-f", tmpPath)
+		cmd := exec.Command("ollama", "create", ollamaModelName, "-f", tmpPath)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			ui.PrintError(fmt.Sprintf("'ollama create' failed: %v\nOutput: %s", err, string(output)))
