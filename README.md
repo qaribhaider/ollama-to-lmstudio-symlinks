@@ -10,6 +10,7 @@ If you have models downloaded in Ollama and want to use them in LM Studio, you t
 
 - **🔄 Bidirectional Sync**: Link Ollama models to LM Studio OR LM Studio models to Ollama
 - **🔍 Dynamic Discovery**: Automatically scans and discovers models in both applications
+- **🎯 Interactive Menus**: Select exactly which models to link using the built-in interactive CLI, or run it fully automated.
 - **🧹 Interactive & Auto Cleanup**: Safely remove symlinks through the interactive `delete` command, or auto-discover and wipe broken ghost-links using `cleanup`
 - **⚙️ Configurable Paths**: Customize directories via command-line flags
 - **🛡️ Safe Operations**: Never overwrites existing files; ignores existing symlinks to avoid circular loops
@@ -42,14 +43,22 @@ curl -fsSL https://raw.githubusercontent.com/qaribhaider/ollama-to-lmstudio-syml
 ```
 ## 🚀 Quick Start
 
-### Run with Defaults
+### Run Interactive Main Menu
 
 ```bash
 ./ollama-symlinks
 ```
 
-This will:
+This will launch the interactive main menu, allowing you to choose whether to link models, delete links, or clean up broken symlinks. By default, linking will prompt you to select exactly which models to process.
 
+### Automated Run (Link All Models)
+To run the forward linking process automatically for all models (useful for scripts), use:
+
+```bash
+./ollama-symlinks --interactive=false
+```
+
+This will:
 - Scan `~/.ollama/models` for Ollama models
 - Create symlinks in `~/.cache/lm-studio/models/ollama/`
 
@@ -110,6 +119,7 @@ If you delete an Ollama model directly using `ollama rm`, the symlinks in LM Stu
 | `--ollama-dir` | `string` | `~/.ollama/models` | Path to the root Ollama models directory. |
 | `--lmstudio-dir` | `string` | `~/.cache/lm-studio/models` | Path to the root LM Studio models directory. |
 | `--reverse` | `bool` | `false` | Enable **Reverse Mode**: Link models from LM Studio → Ollama. |
+| `--interactive` (`-i`) | `bool` | `true` | Enable interactive mode for menus and model selection. Set to `false` for automated runs. |
 | `--name-prefix` | `string` | `lms` | Prefix used for naming models when importing into Ollama. |
 | `--skip-provider` | `string` | `ollama` | Folder name in LM Studio where symlinks are created. |
 | `--hardlinks` | `bool` | `false` | Use hard links instead of symlinks. Fixes "0 bytes" or "failed to load" issues on Windows. |

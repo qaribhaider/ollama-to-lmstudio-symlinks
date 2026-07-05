@@ -63,6 +63,9 @@ func runApp(args []string, stdin io.Reader) error {
 	var deepScan = fs.Bool("deep-scan", false, "Scan all Windows drives for model directories (fallback)")
 	var showVersion = fs.Bool("version", false, "Show version information")
 
+	var interactive = fs.Bool("interactive", true, "Interactive mode (main menu and model selection)")
+	fs.BoolVar(interactive, "i", true, "Interactive mode (shorthand)")
+
 	var useHardlinks = fs.Bool("hardlinks", false, "Use hard links instead of symlinks (fixes '0 bytes' issue on Windows)")
 
 	// Reverse mode flags
@@ -220,17 +223,79 @@ func runApp(args []string, stdin io.Reader) error {
 		if _, err := os.Stat(*lmstudioDir); os.IsNotExist(err) {
 			return fmt.Errorf("LM Studio directory does not exist: %s. Use --lmstudio-dir or --deep-scan to help find it.", *lmstudioDir)
 		}
-		if err := runReverse(*lmstudioDir, *ollamaDir, *namePrefix, *skipProvider, *dryRun, *verbose, *useHardlinks); err != nil {
+		if err := runReverse(*lmstudioDir, *ollamaDir, *namePrefix, *skipProvider, *dryRun, *verbose, *useHardlinks, *interactive); err != nil {
 			return err
 		}
 	} else {
+		if *interactive {
+			return runMainMenu(*ollamaDir, *lmstudioDir, *namePrefix, *skipProvider, *dryRun, *verbose, *useHardlinks, stdin)
+		}
+
 		// Check Ollama dir exists
 		if _, err := os.Stat(*ollamaDir); os.IsNotExist(err) {
 			return fmt.Errorf("Ollama directory does not exist: %s. Use --ollama-dir or --deep-scan to help find it.", *ollamaDir)
 		}
-		if err := runForward(*ollamaDir, *lmstudioDir, *dryRun, *verbose, *useHardlinks); err != nil {
+		if err := runForward(*ollamaDir, *lmstudioDir, *dryRun, *verbose, *useHardlinks, false); err != nil {
 			return err
 		}
+	}
+
+	return nil
+}
+
+func runMainMenu(ollamaDir, lmstudioDir, namePrefix, skipProvider string, dryRun, verbose, useHardlinks bool, stdin io.Reader) error {
+	var action string
+	err := huh.NewSelect[string]().
+		Title("What would you like to do?").
+		Options(
+			huh.NewOption("Link Ollama models to LM Studio", "forward"),
+			huh.NewOption("Link LM Studio models to Ollama (Reverse)", "reverse"),
+			huh.NewOption("Delete existing symlinks", "delete"),
+			huh.NewOption("Cleanup broken symlinks", "cleanup"),
+			huh.NewOption("Exit", "exit"),
+		).
+		Value(&action).
+		Run()
+
+	if err != nil {
+		if errors.Is(err, huh.ErrUserAborted) {
+			return nil
+		}
+		return err
+	}
+
+	switch action {
+	case "forward":
+		// Check Ollama dir exists
+		if _, err := os.Stat(ollamaDir); os.IsNotExist(err) {
+			return fmt.Errorf("Ollama directory does not exist: %s. Use --ollama-dir or --deep-scan to help find it.", ollamaDir)
+		}
+		return runForward(ollamaDir, lmstudioDir, dryRun, verbose, useHardlinks, true)
+	case "reverse":
+		// Check LM Studio dir exists
+		if _, err := os.Stat(lmstudioDir); os.IsNotExist(err) {
+			return fmt.Errorf("LM Studio directory does not exist: %s. Use --lmstudio-dir or --deep-scan to help find it.", lmstudioDir)
+		}
+		return runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider, dryRun, verbose, useHardlinks, true)
+	case "delete":
+		var from string
+		err := huh.NewSelect[string]().
+			Title("Delete symlinks from where?").
+			Options(
+				huh.NewOption("From Ollama", "ollama"),
+				huh.NewOption("From LM Studio", "lmstudio"),
+			).
+			Value(&from).
+			Run()
+		if err != nil {
+			if errors.Is(err, huh.ErrUserAborted) {
+				return nil
+			}
+			return err
+		}
+		return runDelete(from, ollamaDir, lmstudioDir, skipProvider, dryRun, verbose, stdin)
+	case "cleanup":
+		return runCleanup(lmstudioDir, dryRun, verbose, stdin)
 	}
 
 	return nil
@@ -477,7 +542,7 @@ func runDeleteOllama(ollamaDir string, dryRun, verbose bool, stdin io.Reader) er
 	return nil
 }
 
-func runForward(ollamaDir, lmstudioDir string, dryRun, verbose, useHardlinks bool) error {
+func runForward(ollamaDir, lmstudioDir string, dryRun, verbose, useHardlinks, interactive bool) error {
 	ui.PrintHeader("Ollama → LM Studio Linker")
 	ui.PrintInfo(fmt.Sprintf("Ollama directory: %s", ollamaDir))
 	ui.PrintInfo(fmt.Sprintf("Target LM Studio directory: %s", lmstudioDir))
@@ -488,21 +553,59 @@ func runForward(ollamaDir, lmstudioDir string, dryRun, verbose, useHardlinks boo
 	ui.PrintEmptyLine()
 
 	// Discover models
-	models, err := ollama.DiscoverModels(ollamaDir, verbose)
+	discoveredModels, err := ollama.DiscoverModels(ollamaDir, verbose)
 	if err != nil {
 		return fmt.Errorf("error discovering models: %w", err)
 	}
 
-	if len(models) == 0 {
+	if len(discoveredModels) == 0 {
 		ui.PrintError("No models found in Ollama directory")
 		return nil
 	}
 
-	ui.PrintSubheader(fmt.Sprintf("Found %d models", len(models)))
-	for _, model := range models {
-		ui.PrintBullet(model.Name)
+	if interactive {
+		var options []huh.Option[string]
+		for _, m := range discoveredModels {
+			options = append(options, huh.NewOption(m.Name, m.Name).Selected(true))
+		}
+		var selectedNames []string
+		err = huh.NewMultiSelect[string]().
+			Title("Select models to link").
+			Description("Use Space to toggle, Enter to confirm").
+			Options(options...).
+			Value(&selectedNames).
+			Run()
+
+		if err != nil {
+			if errors.Is(err, huh.ErrUserAborted) {
+				ui.PrintInfo("Cancelled")
+				return nil
+			}
+			return err
+		}
+
+		if len(selectedNames) == 0 {
+			ui.PrintWarning("No models selected")
+			return nil
+		}
+
+		var filtered []models.ModelInfo
+		for _, name := range selectedNames {
+			for _, m := range discoveredModels {
+				if m.Name == name {
+					filtered = append(filtered, m)
+					break
+				}
+			}
+		}
+		discoveredModels = filtered
+	} else {
+		ui.PrintSubheader(fmt.Sprintf("Found %d models", len(discoveredModels)))
+		for _, model := range discoveredModels {
+			ui.PrintBullet(model.Name)
+		}
+		ui.PrintEmptyLine()
 	}
-	ui.PrintEmptyLine()
 
 	// Create ollama provider directory
 	ollamaProviderDir := filepath.Join(lmstudioDir, "ollama")
@@ -514,7 +617,7 @@ func runForward(ollamaDir, lmstudioDir string, dryRun, verbose, useHardlinks boo
 
 	// Process each model
 	var created, skipped int
-	for _, model := range models {
+	for _, model := range discoveredModels {
 		result := linking.ProcessModel(model, ollamaDir, ollamaProviderDir, dryRun, verbose, useHardlinks)
 		if result {
 			created++
@@ -536,7 +639,7 @@ func runForward(ollamaDir, lmstudioDir string, dryRun, verbose, useHardlinks boo
 	return nil
 }
 
-func runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider string, dryRun, verbose, useHardlinks bool) error {
+func runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider string, dryRun, verbose, useHardlinks, interactive bool) error {
 	ui.PrintHeader("LM Studio → Ollama Linker")
 	ui.PrintInfo(fmt.Sprintf("LM Studio directory: %s", lmstudioDir))
 	ui.PrintInfo(fmt.Sprintf("Target Ollama directory: %s", ollamaDir))
@@ -546,25 +649,63 @@ func runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider string, dryRun,
 	ui.PrintEmptyLine()
 
 	// Discover models
-	models, err := lmstudio.DiscoverLMStudioModels(lmstudioDir, skipProvider, verbose)
+	discoveredModels, err := lmstudio.DiscoverLMStudioModels(lmstudioDir, skipProvider, verbose)
 	if err != nil {
 		return fmt.Errorf("error discovering models: %w", err)
 	}
 
-	if len(models) == 0 {
+	if len(discoveredModels) == 0 {
 		ui.PrintError("No eligible models found in LM Studio directory")
 		return nil
 	}
 
-	ui.PrintSubheader(fmt.Sprintf("Found %d eligible models", len(models)))
-	for _, model := range models {
-		ui.PrintBullet(fmt.Sprintf("%s (%s)", model.Name, model.Path))
+	if interactive {
+		var options []huh.Option[string]
+		for _, m := range discoveredModels {
+			options = append(options, huh.NewOption(m.Name, m.Name).Selected(true))
+		}
+		var selectedNames []string
+		err = huh.NewMultiSelect[string]().
+			Title("Select models to link").
+			Description("Use Space to toggle, Enter to confirm").
+			Options(options...).
+			Value(&selectedNames).
+			Run()
+
+		if err != nil {
+			if errors.Is(err, huh.ErrUserAborted) {
+				ui.PrintInfo("Cancelled")
+				return nil
+			}
+			return err
+		}
+
+		if len(selectedNames) == 0 {
+			ui.PrintWarning("No models selected")
+			return nil
+		}
+
+		var filtered []models.LMStudioModel
+		for _, name := range selectedNames {
+			for _, m := range discoveredModels {
+				if m.Name == name {
+					filtered = append(filtered, m)
+					break
+				}
+			}
+		}
+		discoveredModels = filtered
+	} else {
+		ui.PrintSubheader(fmt.Sprintf("Found %d eligible models", len(discoveredModels)))
+		for _, model := range discoveredModels {
+			ui.PrintBullet(fmt.Sprintf("%s (%s)", model.Name, model.Path))
+		}
+		ui.PrintEmptyLine()
 	}
-	ui.PrintEmptyLine()
 
 	// Process each model
 	var created, skipped int
-	for _, model := range models {
+	for _, model := range discoveredModels {
 		result := linking.ProcessLMStudioModel(model, ollamaDir, namePrefix, dryRun, verbose, useHardlinks)
 		if result {
 			created++
