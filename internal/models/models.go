@@ -25,6 +25,7 @@ type ModelInfo struct {
 
 // LMStudioModel holds information about a model found in LM Studio
 type LMStudioModel struct {
-	Name string
-	Path string
+	Name          string
+	Path          string
+	ProjectorPath string // Optional path to paired mmproj GGUF for vision models
 }

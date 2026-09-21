@@ -699,7 +699,11 @@ func runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider string, dryRun,
 	if interactive {
 		var options []huh.Option[string]
 		for _, m := range discoveredModels {
-			options = append(options, huh.NewOption(m.Name, m.Name).Selected(true))
+			label := m.Name
+			if m.ProjectorPath != "" {
+				label = fmt.Sprintf("%s [vision: %s]", m.Name, filepath.Base(m.ProjectorPath))
+			}
+			options = append(options, huh.NewOption(label, m.Name).Selected(true))
 		}
 		var selectedNames []string
 		err = huh.NewMultiSelect[string]().
@@ -735,7 +739,11 @@ func runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider string, dryRun,
 	} else {
 		ui.PrintSubheader(fmt.Sprintf("Found %d eligible models", len(discoveredModels)))
 		for _, model := range discoveredModels {
-			ui.PrintBullet(fmt.Sprintf("%s (%s)", model.Name, model.Path))
+			if model.ProjectorPath != "" {
+				ui.PrintBullet(fmt.Sprintf("%s (%s) [vision: %s]", model.Name, model.Path, filepath.Base(model.ProjectorPath)))
+			} else {
+				ui.PrintBullet(fmt.Sprintf("%s (%s)", model.Name, model.Path))
+			}
 		}
 		ui.PrintEmptyLine()
 	}
