@@ -185,6 +185,19 @@ Recent versions of LM Studio or strict Windows configurations may block standard
 
 **⚠️ Important Note on Space:** Hard links are identical to regular files. If you run `ollama rm <model>` to clear disk space, the space **won't actually be freed** until you also delete the linked file from LM Studio using `ollama-symlinks delete --from lmstudio`.
 
+### "Blocking validation error: 'ollama' executable not found" or "LM Studio not found"
+
+Before modifying files, the tool checks whether Ollama or LM Studio is installed and available in your environment.
+If you are working with external or portable model directories, or want to bypass these pre-flight checks, supply `--skip-checks`:
+
+```bash
+# Bypass pre-flight checks for forward or reverse mode
+./ollama-symlinks --skip-checks
+
+# Also works with subcommands
+./ollama-symlinks delete --from ollama --skip-checks
+```
+
 ### Models not appearing in LM Studio
 
 1. Restart LM Studio after creating symlinks
