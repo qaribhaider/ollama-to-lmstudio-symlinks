@@ -39,6 +39,7 @@ func runApp(args []string, stdin io.Reader) error {
 		ui.PrintEmptyLine()
 		
 		fmt.Println(ui.HeaderStyle.Render("Commands"))
+		fmt.Printf("  %-12s %s\n", "status", "Show active links, broken symlinks, and disk space savings")
 		fmt.Printf("  %-12s %s\n", "delete", "Interactively delete symlinks from Ollama or LM Studio")
 		fmt.Printf("  %-12s %s\n", "cleanup", "Auto-discover and remove broken symlinks")
 		ui.PrintEmptyLine()
@@ -90,6 +91,41 @@ func runApp(args []string, stdin io.Reader) error {
 
 	// Simple subcommand handling
 	remainingArgs := fs.Args()
+	if len(remainingArgs) > 0 && remainingArgs[0] == "status" {
+		statusFs := flag.NewFlagSet("status", flag.ContinueOnError)
+		statusFs.Usage = func() {
+			ui.PrintHeader(fmt.Sprintf("Usage: %s %s [flags]", fs.Name(), statusFs.Name()))
+			ui.PrintEmptyLine()
+
+			fmt.Println(ui.HeaderStyle.Render("Flags"))
+			statusFs.VisitAll(func(f *flag.Flag) {
+				_, usage := flag.UnquoteUsage(f)
+				defaultText := ""
+				if f.DefValue != "" && f.DefValue != "false" {
+					defaultText = ui.MutedStyle.Render(fmt.Sprintf("(default: %q)", f.DefValue))
+				}
+				fmt.Printf("  %-14s %s %s\n", "--"+f.Name, usage, defaultText)
+			})
+			ui.PrintEmptyLine()
+		}
+
+		statusVerbose := statusFs.Bool("verbose", *verbose, "Enable verbose output to list individual symlinks")
+		statusFs.StringVar(lmstudioDir, "lmstudio-dir", *lmstudioDir, "Path to LM Studio models directory")
+		statusFs.StringVar(ollamaDir, "ollama-dir", *ollamaDir, "Path to Ollama models directory")
+		statusFs.StringVar(skipProvider, "skip-provider", *skipProvider, "Name of provider directory in LM Studio")
+
+		if err := statusFs.Parse(remainingArgs[1:]); err != nil {
+			return err
+		}
+
+		if len(statusFs.Args()) > 0 {
+			statusFs.Usage()
+			return fmt.Errorf("unexpected argument: %s", statusFs.Args()[0])
+		}
+
+		return runStatus(*ollamaDir, *lmstudioDir, *skipProvider, *statusVerbose)
+	}
+
 	if len(remainingArgs) > 0 && remainingArgs[0] == "delete" {
 		// New FlagSet for delete subcommand
 		deleteFs := flag.NewFlagSet("delete", flag.ContinueOnError)
@@ -112,6 +148,7 @@ func runApp(args []string, stdin io.Reader) error {
 		deleteDryRun := deleteFs.Bool("dry-run", *dryRun, "Show what would be deleted without actually removing them")
 		deleteVerbose := deleteFs.Bool("verbose", *verbose, "Enable verbose output")
 		deleteSkipChecks := deleteFs.Bool("skip-checks", *skipChecks, "Skip pre-flight validation checks for Ollama and LM Studio")
+		deleteNamePrefix := deleteFs.String("name-prefix", *namePrefix, "Prefix for models created in Ollama")
 		
 		// Re-bind global flags to deleteFs so they can be parsed after the subcommand
 		deleteFs.StringVar(ollamaDir, "ollama-dir", *ollamaDir, "Path to Ollama models directory")
@@ -135,7 +172,7 @@ func runApp(args []string, stdin io.Reader) error {
 			return fmt.Errorf("invalid --from value: %s (must be 'ollama' or 'lmstudio')", *from)
 		}
 
-		return runDelete(*from, *ollamaDir, *lmstudioDir, *skipProvider, *deleteDryRun, *deleteVerbose, *deleteSkipChecks, stdin)
+		return runDelete(*from, *ollamaDir, *lmstudioDir, *deleteNamePrefix, *skipProvider, *deleteDryRun, *deleteVerbose, *deleteSkipChecks, stdin)
 	}
 
 	if len(remainingArgs) > 0 {
@@ -163,6 +200,7 @@ func runApp(args []string, stdin io.Reader) error {
 			
 			// Re-bind global flags to cleanupFs so they can be parsed after the subcommand
 			cleanupFs.StringVar(lmstudioDir, "lmstudio-dir", *lmstudioDir, "Path to LM Studio models directory")
+			cleanupFs.StringVar(ollamaDir, "ollama-dir", *ollamaDir, "Path to Ollama models directory")
 			
 			if err := cleanupFs.Parse(remainingArgs[1:]); err != nil {
 				return err
@@ -173,7 +211,7 @@ func runApp(args []string, stdin io.Reader) error {
 				return fmt.Errorf("unexpected argument: %s", cleanupFs.Args()[0])
 			}
 			
-			return runCleanup(*lmstudioDir, *cleanupDryRun, *cleanupVerbose, *cleanupSkipChecks, stdin)
+			return runCleanup(*lmstudioDir, *ollamaDir, *cleanupDryRun, *cleanupVerbose, *cleanupSkipChecks, stdin)
 		}
 
 		// Unknown command
@@ -251,6 +289,7 @@ func runMainMenu(ollamaDir, lmstudioDir, namePrefix, skipProvider string, dryRun
 	err := huh.NewSelect[string]().
 		Title("What would you like to do?").
 		Options(
+			huh.NewOption("View status and storage savings", "status"),
 			huh.NewOption("Link Ollama models to LM Studio", "forward"),
 			huh.NewOption("Link LM Studio models to Ollama (Reverse)", "reverse"),
 			huh.NewOption("Delete existing symlinks", "delete"),
@@ -268,6 +307,8 @@ func runMainMenu(ollamaDir, lmstudioDir, namePrefix, skipProvider string, dryRun
 	}
 
 	switch action {
+	case "status":
+		return runStatus(ollamaDir, lmstudioDir, skipProvider, verbose)
 	case "forward":
 		// Check Ollama dir exists
 		if _, err := os.Stat(ollamaDir); os.IsNotExist(err) {
@@ -296,17 +337,17 @@ func runMainMenu(ollamaDir, lmstudioDir, namePrefix, skipProvider string, dryRun
 			}
 			return err
 		}
-		return runDelete(from, ollamaDir, lmstudioDir, skipProvider, dryRun, verbose, skipChecks, stdin)
+		return runDelete(from, ollamaDir, lmstudioDir, namePrefix, skipProvider, dryRun, verbose, skipChecks, stdin)
 	case "cleanup":
-		return runCleanup(lmstudioDir, dryRun, verbose, skipChecks, stdin)
+		return runCleanup(lmstudioDir, ollamaDir, dryRun, verbose, skipChecks, stdin)
 	}
 
 	return nil
 }
 
-func runDelete(from, ollamaDir, lmstudioDir, skipProvider string, dryRun, verbose, skipChecks bool, stdin io.Reader) error {
+func runDelete(from, ollamaDir, lmstudioDir, namePrefix, skipProvider string, dryRun, verbose, skipChecks bool, stdin io.Reader) error {
 	if from == "ollama" {
-		return runDeleteOllama(ollamaDir, dryRun, verbose, skipChecks, stdin)
+		return runDeleteOllama(ollamaDir, namePrefix, dryRun, verbose, skipChecks, stdin)
 	}
 
 	targetDir := filepath.Join(lmstudioDir, skipProvider)
@@ -390,7 +431,7 @@ func runDelete(from, ollamaDir, lmstudioDir, skipProvider string, dryRun, verbos
 	return nil
 }
 
-func runDeleteOllama(ollamaDir string, dryRun, verbose, skipChecks bool, stdin io.Reader) error {
+func runDeleteOllama(ollamaDir, namePrefix string, dryRun, verbose, skipChecks bool, stdin io.Reader) error {
 	// Check if Ollama manifests and blobs dirs exist
 	manifestsDir := filepath.Join(ollamaDir, "manifests")
 	if _, err := os.Stat(manifestsDir); os.IsNotExist(err) {
@@ -421,7 +462,9 @@ func runDeleteOllama(ollamaDir string, dryRun, verbose, skipChecks bool, stdin i
 		blobPath := filepath.Join(ollamaDir, "blobs", blobFilename)
 		
 		info, err := os.Lstat(blobPath)
-		isOurModel := strings.HasPrefix(m.Name, "lms-") || strings.HasPrefix(m.Name, "lms:")
+		prefix := namePrefix + "-"
+		isOurModel := strings.HasPrefix(m.Name, "lms-") || strings.HasPrefix(m.Name, "lms:") ||
+			(namePrefix != "" && (strings.HasPrefix(m.Name, prefix) || strings.HasPrefix(m.Name, namePrefix+":")))
 		
 		if err == nil {
 			if info.Mode()&os.ModeSymlink != 0 {
@@ -532,7 +575,7 @@ func runDeleteOllama(ollamaDir string, dryRun, verbose, skipChecks bool, stdin i
 		// Use 'ollama rm' to properly clean up manifest and blob links
 		importPath := m.Name
 		// Validate model name to prevent accidental flag interpretation
-		if matched, _ := regexp.MatchString(`^[a-zA-Z0-9._-]+:[a-zA-Z0-9._-]+$`, importPath); !matched {
+		if matched, _ := regexp.MatchString(`^[a-zA-Z0-9._/-]+:[a-zA-Z0-9._-]+$`, importPath); !matched || strings.Contains(importPath, "..") {
 			ui.PrintError(fmt.Sprintf("Refusing to run 'ollama rm' with unsafe model name: %q", importPath))
 			failed++
 			continue
@@ -702,6 +745,8 @@ func runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider string, dryRun,
 			label := m.Name
 			if m.ProjectorPath != "" {
 				label = fmt.Sprintf("%s [vision: %s]", m.Name, filepath.Base(m.ProjectorPath))
+			} else if len(m.ShardPaths) > 0 {
+				label = fmt.Sprintf("%s [%d shards]", m.Name, len(m.ShardPaths)+1)
 			}
 			options = append(options, huh.NewOption(label, m.Name).Selected(true))
 		}
@@ -739,11 +784,13 @@ func runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider string, dryRun,
 	} else {
 		ui.PrintSubheader(fmt.Sprintf("Found %d eligible models", len(discoveredModels)))
 		for _, model := range discoveredModels {
+			extra := ""
 			if model.ProjectorPath != "" {
-				ui.PrintBullet(fmt.Sprintf("%s (%s) [vision: %s]", model.Name, model.Path, filepath.Base(model.ProjectorPath)))
-			} else {
-				ui.PrintBullet(fmt.Sprintf("%s (%s)", model.Name, model.Path))
+				extra = fmt.Sprintf(" [vision: %s]", filepath.Base(model.ProjectorPath))
+			} else if len(model.ShardPaths) > 0 {
+				extra = fmt.Sprintf(" [%d shards]", len(model.ShardPaths)+1)
 			}
+			ui.PrintBullet(fmt.Sprintf("%s (%s)%s", model.Name, model.Path, extra))
 		}
 		ui.PrintEmptyLine()
 	}
@@ -772,33 +819,48 @@ func runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider string, dryRun,
 	return nil
 }
 
-func runCleanup(lmstudioDir string, dryRun, verbose, skipChecks bool, stdin io.Reader) error {
-	targetDir := filepath.Join(lmstudioDir, "ollama")
-	
-	if err := lmstudio.ValidateLMStudio(skipChecks, targetDir); err != nil {
-		ui.PrintError(err.Error())
-		return err
+func runCleanup(lmstudioDir, ollamaDir string, dryRun, verbose, skipChecks bool, stdin io.Reader) error {
+	var totalBroken []linking.SymlinkInfo
+	var scanLocations []string
+
+	// 1. LM Studio managed directory
+	lmsTargetDir := filepath.Join(lmstudioDir, "ollama")
+	if _, err := os.Stat(lmsTargetDir); err == nil {
+		scanLocations = append(scanLocations, lmsTargetDir)
+		ui.PrintSubheader("Scanning for broken symlinks in LM Studio: " + lmsTargetDir)
+		broken, err := linking.FindBrokenSymlinks(lmsTargetDir)
+		if err != nil {
+			ui.PrintWarning(fmt.Sprintf("Could not search for broken symlinks in %s: %v", lmsTargetDir, err))
+		} else {
+			totalBroken = append(totalBroken, broken...)
+		}
 	}
 
-	// Check if target dir exists
-	if _, err := os.Stat(targetDir); os.IsNotExist(err) {
-		ui.PrintSuccess("No managed 'ollama' directory found in LM Studio. Nothing to clean.")
+	// 2. Ollama blobs directory
+	ollamaBlobsDir := filepath.Join(ollamaDir, "blobs")
+	if _, err := os.Stat(ollamaBlobsDir); err == nil {
+		scanLocations = append(scanLocations, ollamaBlobsDir)
+		ui.PrintSubheader("Scanning for broken symlinks in Ollama blobs: " + ollamaBlobsDir)
+		broken, err := linking.FindBrokenSymlinks(ollamaBlobsDir)
+		if err != nil {
+			ui.PrintWarning(fmt.Sprintf("Could not search for broken symlinks in %s: %v", ollamaBlobsDir, err))
+		} else {
+			totalBroken = append(totalBroken, broken...)
+		}
+	}
+
+	if len(scanLocations) == 0 {
+		ui.PrintSuccess("No managed model directories found to clean.")
 		return nil
 	}
 
-	ui.PrintSubheader("Scanning for broken symlinks in: " + targetDir)
-	brokenLinks, err := linking.FindBrokenSymlinks(targetDir)
-	if err != nil {
-		return fmt.Errorf("could not search for broken symlinks: %w", err)
-	}
-
-	if len(brokenLinks) == 0 {
-		ui.PrintSuccess("No broken symbolic links found.")
+	if len(totalBroken) == 0 {
+		ui.PrintSuccess("No broken symbolic links found across LM Studio and Ollama.")
 		return nil
 	}
 
-	ui.PrintInfo(fmt.Sprintf("Found %d broken symbolic links (targets are missing):", len(brokenLinks)))
-	for _, link := range brokenLinks {
+	ui.PrintInfo(fmt.Sprintf("Found %d broken symbolic link(s) (targets are missing):", len(totalBroken)))
+	for _, link := range totalBroken {
 		ui.PrintBullet(fmt.Sprintf("%s -> %s", link.Path, link.Target))
 	}
 	ui.PrintEmptyLine()
@@ -809,8 +871,8 @@ func runCleanup(lmstudioDir string, dryRun, verbose, skipChecks bool, stdin io.R
 	}
 
 	var confirm bool
-	err = huh.NewConfirm().
-		Title(fmt.Sprintf("Are you sure you want to delete these %d broken symlinks?", len(brokenLinks))).
+	err := huh.NewConfirm().
+		Title(fmt.Sprintf("Are you sure you want to delete these %d broken symlink(s)?", len(totalBroken))).
 		Affirmative("Yes").
 		Negative("No").
 		Value(&confirm).
@@ -822,7 +884,7 @@ func runCleanup(lmstudioDir string, dryRun, verbose, skipChecks bool, stdin io.R
 	}
 
 	var paths []string
-	for _, link := range brokenLinks {
+	for _, link := range totalBroken {
 		paths = append(paths, link.Path)
 	}
 
@@ -832,18 +894,17 @@ func runCleanup(lmstudioDir string, dryRun, verbose, skipChecks bool, stdin io.R
 		fmt.Sprintf("Removed: %d", removed),
 		fmt.Sprintf("Failed:  %d", failed),
 	))
-	
-	// Try to remove empty directories
-	if removed > 0 {
+
+	// Clean up any empty directories in LM Studio
+	if removed > 0 && lmsTargetDir != "" {
 		if verbose {
-			ui.PrintMuted("Cleaning up empty model directories...")
+			ui.PrintMuted("Cleaning up empty model directories in LM Studio...")
 		}
-		entries, err := os.ReadDir(targetDir)
+		entries, err := os.ReadDir(lmsTargetDir)
 		if err == nil {
 			for _, entry := range entries {
 				if entry.IsDir() {
-					dirPath := filepath.Join(targetDir, entry.Name())
-					// Only remove if empty
+					dirPath := filepath.Join(lmsTargetDir, entry.Name())
 					if files, err := os.ReadDir(dirPath); err == nil && len(files) == 0 {
 						os.Remove(dirPath)
 						if verbose {
@@ -854,6 +915,98 @@ func runCleanup(lmstudioDir string, dryRun, verbose, skipChecks bool, stdin io.R
 			}
 		}
 	}
+
+	return nil
+}
+
+func runStatus(ollamaDir, lmstudioDir, skipProvider string, verbose bool) error {
+	ui.PrintHeader("Ollama ↔ LM Studio Status Report")
+	ui.PrintEmptyLine()
+
+	// 1. Executables & Environment
+	fmt.Println(ui.HeaderStyle.Render("Executables & Environment"))
+	ollamaBin, ollamaErr := ollama.GetOllamaExecutable()
+	if ollamaErr == nil && ollamaBin != "" {
+		ui.PrintBullet(fmt.Sprintf("Ollama CLI:    installed (%s)", ollamaBin))
+	} else {
+		ui.PrintWarning("Ollama CLI:    not found in PATH")
+	}
+
+	lmsBin, lmsErr := lmstudio.GetLMStudioExecutable()
+	if lmsErr == nil && lmsBin != "" {
+		ui.PrintBullet(fmt.Sprintf("LM Studio CLI: installed (%s)", lmsBin))
+	} else if lmstudio.IsLMStudioInstalled(lmstudioDir) {
+		ui.PrintBullet("LM Studio:     models directory detected")
+	} else {
+		ui.PrintWarning("LM Studio:     not detected")
+	}
+	ui.PrintEmptyLine()
+
+	// 2. LM Studio Managed Links (lmstudioDir/skipProvider)
+	lmsTargetDir := filepath.Join(lmstudioDir, skipProvider)
+	lmsStatus, _ := linking.InspectDirectory(lmsTargetDir)
+
+	fmt.Println(ui.HeaderStyle.Render("LM Studio Models (" + lmsTargetDir + ")"))
+	if !lmsStatus.Exists {
+		ui.PrintMuted("Directory does not exist yet (no forward symlinks created).")
+	} else {
+		ui.PrintBullet(fmt.Sprintf("Active symlinks:  %d", lmsStatus.ActiveLinks))
+		if lmsStatus.BrokenLinks > 0 {
+			ui.PrintError(fmt.Sprintf("Broken symlinks:  %d (run 'ollama-symlinks cleanup' to remove)", lmsStatus.BrokenLinks))
+		} else {
+			ui.PrintBullet("Broken symlinks:  0")
+		}
+		ui.PrintBullet(fmt.Sprintf("Disk space saved: %s", linking.FormatBytes(lmsStatus.BytesSaved)))
+		if verbose && len(lmsStatus.Files) > 0 {
+			for _, f := range lmsStatus.Files {
+				if f.IsBroken {
+					ui.PrintMuted(fmt.Sprintf("  ✖ %s -> [broken: %s]", f.Name, f.Target))
+				} else {
+					ui.PrintMuted(fmt.Sprintf("  ✔ %s (%s)", f.Name, linking.FormatBytes(f.TargetSize)))
+				}
+			}
+		}
+	}
+	ui.PrintEmptyLine()
+
+	// 3. Ollama Blobs Managed Links (ollamaDir/blobs)
+	ollamaBlobsDir := filepath.Join(ollamaDir, "blobs")
+	ollamaStatus, _ := linking.InspectDirectory(ollamaBlobsDir)
+
+	fmt.Println(ui.HeaderStyle.Render("Ollama Blobs (" + ollamaBlobsDir + ")"))
+	if !ollamaStatus.Exists {
+		ui.PrintMuted("Directory does not exist yet (no reverse symlinks created).")
+	} else {
+		ui.PrintBullet(fmt.Sprintf("Active symlinks:  %d", ollamaStatus.ActiveLinks))
+		if ollamaStatus.BrokenLinks > 0 {
+			ui.PrintError(fmt.Sprintf("Broken symlinks:  %d (run 'ollama-symlinks cleanup' to remove)", ollamaStatus.BrokenLinks))
+		} else {
+			ui.PrintBullet("Broken symlinks:  0")
+		}
+		ui.PrintBullet(fmt.Sprintf("Disk space saved: %s", linking.FormatBytes(ollamaStatus.BytesSaved)))
+		if verbose && len(ollamaStatus.Files) > 0 {
+			for _, f := range ollamaStatus.Files {
+				if f.IsBroken {
+					ui.PrintMuted(fmt.Sprintf("  ✖ %s -> [broken: %s]", f.Name, f.Target))
+				} else {
+					ui.PrintMuted(fmt.Sprintf("  ✔ %s (%s)", f.Name, linking.FormatBytes(f.TargetSize)))
+				}
+			}
+		}
+	}
+	ui.PrintEmptyLine()
+
+	// 4. Overall Disk Savings Summary
+	totalSaved := lmsStatus.BytesSaved + ollamaStatus.BytesSaved
+	totalActive := lmsStatus.ActiveLinks + ollamaStatus.ActiveLinks
+	totalBroken := lmsStatus.BrokenLinks + ollamaStatus.BrokenLinks
+
+	fmt.Println(ui.FormatSummary(
+		ui.HeaderStyle.Render("Storage Savings Summary"),
+		fmt.Sprintf("Active Symlinks: %d", totalActive),
+		fmt.Sprintf("Broken Symlinks: %d", totalBroken),
+		fmt.Sprintf("Total Saved:     %s", linking.FormatBytes(totalSaved)),
+	))
 
 	return nil
 }

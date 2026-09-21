@@ -27,5 +27,6 @@ type ModelInfo struct {
 type LMStudioModel struct {
 	Name          string
 	Path          string
-	ProjectorPath string // Optional path to paired mmproj GGUF for vision models
+	ProjectorPath string   // Optional path to paired mmproj GGUF for vision models
+	ShardPaths    []string // Companion shard paths (part 2..N) if the model is sharded
 }

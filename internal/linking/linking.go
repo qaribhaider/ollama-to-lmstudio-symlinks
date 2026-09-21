@@ -109,14 +109,19 @@ func createLink(source, target string, forceHardlink bool) error {
 }
 
 func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, dryRun, verbose, useHardlinks bool) bool {
-	// Sanitize name for directory usage (replace : with - for tags)
-	safeDirName := strings.Replace(model.Name, ":", "-", -1)
+	// Sanitize name for directory usage (replace : and / with - for tags and namespaces)
+	safeDirName := strings.ReplaceAll(model.Name, ":", "-")
+	safeDirName = strings.ReplaceAll(safeDirName, "/", "-")
 	modelDir, err := SecureJoin(ollamaProviderDir, safeDirName)
 	if err != nil {
 		ui.PrintError(fmt.Sprintf("%v", err))
 		return false
 	}
-	mainModelPath, err := SecureJoin(modelDir, safeDirName+".gguf")
+	firstShardFilename := safeDirName + ".gguf"
+	if len(model.MainModelBlobs) > 1 {
+		firstShardFilename = fmt.Sprintf("%s-00001-of-%05d.gguf", safeDirName, len(model.MainModelBlobs))
+	}
+	mainModelPath, err := SecureJoin(modelDir, firstShardFilename)
 	if err != nil {
 		ui.PrintError(fmt.Sprintf("%v", err))
 		return false
@@ -124,7 +129,7 @@ func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, d
 
 	// Check if main model symlink already exists
 	if info, err := os.Lstat(mainModelPath); err == nil {
-		if info.Mode()&os.ModeSymlink == 0 {
+		if info.Mode()&os.ModeSymlink == 0 && (!useHardlinks || !info.Mode().IsRegular()) {
 			ui.PrintWarning(fmt.Sprintf("%s exists but is NOT a symlink — skipping", mainModelPath))
 		} else {
 			ui.PrintInfo(fmt.Sprintf("SKIPPED: %s (already exists)", model.Name))
@@ -255,17 +260,30 @@ func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix, oll
 
 	if verbose {
 		ui.PrintMuted(fmt.Sprintf("File: %s", model.Path))
+		for i, sp := range model.ShardPaths {
+			ui.PrintMuted(fmt.Sprintf("Shard %d: %s", i+2, sp))
+		}
 		if model.ProjectorPath != "" {
 			ui.PrintMuted(fmt.Sprintf("Projector: %s", model.ProjectorPath))
 		}
 	}
 
-	// 1. Link main model blob
+	// 1. Link main model blob (primary shard)
 	if _, ok := linkBlob(model.Path, ollamaDir, dryRun, verbose, useHardlinks); !ok {
 		return false
 	}
 
-	// 2. Link projector blob if present
+	// 2. Link companion shard blobs if present
+	for i, shardPath := range model.ShardPaths {
+		if verbose {
+			ui.PrintInfo(fmt.Sprintf("Linking shard blob %d: %s", i+2, filepath.Base(shardPath)))
+		}
+		if _, ok := linkBlob(shardPath, ollamaDir, dryRun, verbose, useHardlinks); !ok {
+			return false
+		}
+	}
+
+	// 3. Link projector blob if present
 	if model.ProjectorPath != "" {
 		if verbose {
 			ui.PrintInfo(fmt.Sprintf("Linking vision projector: %s", filepath.Base(model.ProjectorPath)))
@@ -275,13 +293,19 @@ func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix, oll
 		}
 	}
 
-	// 3. Register with Ollama using 'ollama create'
+	// 4. Register with Ollama using 'ollama create'
 	ollamaModelName := SanitizeModelName(fmt.Sprintf("%s-%s", namePrefix, model.Name))
 	if !dryRun {
 		// Ensure paths don't contain newlines to prevent Modelfile injection
 		if strings.ContainsAny(model.Path, "\n\r") {
 			ui.PrintError("Invalid model path: contains newlines")
 			return false
+		}
+		for _, sp := range model.ShardPaths {
+			if strings.ContainsAny(sp, "\n\r") {
+				ui.PrintError("Invalid shard path: contains newlines")
+				return false
+			}
 		}
 		if model.ProjectorPath != "" && strings.ContainsAny(model.ProjectorPath, "\n\r") {
 			ui.PrintError("Invalid projector path: contains newlines")
@@ -329,6 +353,8 @@ func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix, oll
 	} else {
 		if model.ProjectorPath != "" {
 			ui.PrintMuted(fmt.Sprintf("Would register vision model with Ollama as: %s (projector: %s)", ollamaModelName, filepath.Base(model.ProjectorPath)))
+		} else if len(model.ShardPaths) > 0 {
+			ui.PrintMuted(fmt.Sprintf("Would register sharded model (%d shards) with Ollama as: %s", len(model.ShardPaths)+1, ollamaModelName))
 		} else {
 			ui.PrintMuted(fmt.Sprintf("Would register with Ollama as: %s", ollamaModelName))
 		}

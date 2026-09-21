@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/gguf"
@@ -143,6 +146,8 @@ func matchProjector(basePath string, projectors []string) string {
 	return bestMatch
 }
 
+var shardRegex = regexp.MustCompile(`(?i)^(.*?)[-_](\d+)-of-(\d+)\.gguf$`)
+
 func generateModelName(lmstudioDir, path string) string {
 	rel, _ := filepath.Rel(lmstudioDir, path)
 	parts := strings.Split(rel, string(os.PathSeparator))
@@ -151,11 +156,20 @@ func generateModelName(lmstudioDir, path string) string {
 	if len(parts) >= 2 {
 		name = strings.Join(parts[:len(parts)-1], "-")
 		filename := strings.TrimSuffix(parts[len(parts)-1], ".gguf")
+		filename = strings.TrimSuffix(filename, ".GGUF")
+		if m := shardRegex.FindStringSubmatch(parts[len(parts)-1]); len(m) == 4 {
+			filename = m[1]
+		}
 		if !strings.Contains(name, filename) {
 			name = name + "-" + filename
 		}
 	} else {
-		name = strings.TrimSuffix(filepath.Base(path), ".gguf")
+		filename := strings.TrimSuffix(filepath.Base(path), ".gguf")
+		filename = strings.TrimSuffix(filename, ".GGUF")
+		if m := shardRegex.FindStringSubmatch(filepath.Base(path)); len(m) == 4 {
+			filename = m[1]
+		}
+		name = filename
 	}
 
 	name = strings.ToLower(name)
@@ -239,7 +253,35 @@ func DiscoverLMStudioModels(lmstudioDir, skipProvider string, verbose bool) ([]m
 			continue
 		}
 
+		type shardInfo struct {
+			path  string
+			part  int
+			total int
+		}
+
+		shardsByPrefix := make(map[string][]shardInfo)
+		var standaloneModels []string
+
 		for _, baseFile := range baseModels {
+			m := shardRegex.FindStringSubmatch(filepath.Base(baseFile))
+			if len(m) == 4 {
+				part, err1 := strconv.Atoi(m[2])
+				total, err2 := strconv.Atoi(m[3])
+				if err1 == nil && err2 == nil && total >= 1 && part >= 1 && part <= total {
+					prefix := strings.ToLower(m[1])
+					shardsByPrefix[prefix] = append(shardsByPrefix[prefix], shardInfo{
+						path:  baseFile,
+						part:  part,
+						total: total,
+					})
+					continue
+				}
+			}
+			standaloneModels = append(standaloneModels, baseFile)
+		}
+
+		// 1. Process standalone (non-sharded) models
+		for _, baseFile := range standaloneModels {
 			name := generateModelName(lmstudioDir, baseFile)
 			model := models.LMStudioModel{
 				Name: name,
@@ -251,6 +293,53 @@ func DiscoverLMStudioModels(lmstudioDir, skipProvider string, verbose bool) ([]m
 					fmt.Printf("🔗 Paired model '%s' with vision projector: %s\n", name, filepath.Base(model.ProjectorPath))
 				}
 			}
+			discoveredModels = append(discoveredModels, model)
+		}
+
+		// 2. Process sharded models (grouped by prefix)
+		var prefixes []string
+		for prefix := range shardsByPrefix {
+			prefixes = append(prefixes, prefix)
+		}
+		sort.Strings(prefixes)
+
+		for _, prefix := range prefixes {
+			shards := shardsByPrefix[prefix]
+			sort.Slice(shards, func(i, j int) bool {
+				return shards[i].part < shards[j].part
+			})
+
+			if shards[0].part != 1 {
+				if verbose {
+					fmt.Printf("⚠️  Skipping incomplete sharded model group %q: missing shard 1 (found %d shards)\n", prefix, len(shards))
+				}
+				continue
+			}
+
+			primaryFile := shards[0].path
+			var companionShards []string
+			for _, s := range shards[1:] {
+				companionShards = append(companionShards, s.path)
+			}
+
+			name := generateModelName(lmstudioDir, primaryFile)
+			model := models.LMStudioModel{
+				Name:       name,
+				Path:       primaryFile,
+				ShardPaths: companionShards,
+			}
+
+			if len(projectors) > 0 {
+				model.ProjectorPath = matchProjector(primaryFile, projectors)
+				if verbose && model.ProjectorPath != "" {
+					fmt.Printf("🔗 Paired sharded model '%s' with vision projector: %s\n", name, filepath.Base(model.ProjectorPath))
+				}
+			}
+
+			if verbose {
+				fmt.Printf("📦 Grouped %d shards for model '%s' (primary: %s)\n", len(shards), name, filepath.Base(primaryFile))
+			}
+
 			discoveredModels = append(discoveredModels, model)
 		}
 	}
