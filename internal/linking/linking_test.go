@@ -144,7 +144,7 @@ func TestProcessLMStudioModelDryRun(t *testing.T) {
 	os.WriteFile(mockFile, []byte("data"), 0644)
 	model.Path = mockFile
 
-	result := ProcessLMStudioModel(model, ollamaDir, "lms", true, false, false)
+	result := ProcessLMStudioModel(model, ollamaDir, "lms", "", true, false, false)
 	if !result {
 		t.Fatal("ProcessLMStudioModel dry run failed")
 	}
@@ -295,3 +295,22 @@ func TestFindBrokenSymlinks(t *testing.T) {
 		t.Errorf("Expected broken link path %s, got %s", brokenLink, broken[0].Path)
 	}
 }
+
+func TestProcessLMStudioModel_ExecutionFailure(t *testing.T) {
+	ollamaDir := t.TempDir()
+	model := models.LMStudioModel{
+		Name: "test-fail-model",
+	}
+
+	tempDir := t.TempDir()
+	mockFile := filepath.Join(tempDir, "mock.gguf")
+	os.WriteFile(mockFile, []byte("data"), 0644)
+	model.Path = mockFile
+
+	// Passing a non-existent binary path should fail at the exec.Command stage and return false
+	result := ProcessLMStudioModel(model, ollamaDir, "lms", "/non/existent/binary/path/ollama", false, false, false)
+	if result {
+		t.Errorf("expected ProcessLMStudioModel to return false on execution failure, got true")
+	}
+}
+

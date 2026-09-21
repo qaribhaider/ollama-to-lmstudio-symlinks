@@ -123,6 +123,7 @@ If you delete an Ollama model directly using `ollama rm`, the symlinks in LM Stu
 | `--name-prefix` | `string` | `lms` | Prefix used for naming models when importing into Ollama. |
 | `--skip-provider` | `string` | `ollama` | Folder name in LM Studio where symlinks are created. |
 | `--hardlinks` | `bool` | `false` | Use hard links instead of symlinks. Fixes "0 bytes" or "failed to load" issues on Windows. |
+| `--skip-checks` | `bool` | `false` | Skip pre-flight validation checks for Ollama and LM Studio. |
 | `--dry-run` | `bool` | `false` | Show logs of what would happen without making changes. |
 | `--verbose` | `bool` | `false` | Enable detailed logging of the process. |
 | `--version` | `bool` | `false` | Display the current version of the utility. |
@@ -133,6 +134,7 @@ If you delete an Ollama model directly using `ollama rm`, the symlinks in LM Stu
 | Flag | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `--from` | `string` | *(Required)* | Target for deletion: `ollama` or `lmstudio`. |
+| `--skip-checks` | `bool` | `false` | Skip pre-flight validation checks for Ollama and LM Studio. |
 | `--dry-run` | `bool` | `false` | Preview which symlinks would be removed. |
 | `--verbose` | `bool` | `false` | Show detailed paths during the deletion. |
 
@@ -140,6 +142,7 @@ If you delete an Ollama model directly using `ollama rm`, the symlinks in LM Stu
 
 | Flag | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
+| `--skip-checks` | `bool` | `false` | Skip pre-flight validation checks for Ollama and LM Studio. |
 | `--dry-run` | `bool` | `false` | Preview which broken symlinks would be removed. |
 | `--verbose` | `bool` | `false` | Enable detailed logging of the process. |
 
