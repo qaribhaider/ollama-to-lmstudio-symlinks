@@ -82,6 +82,26 @@ func InspectDirectory(dir string) (DirStatus, error) {
 				}
 			}
 			status.Files = append(status.Files, detail)
+		} else if d.Type().IsRegular() {
+			info, statErr := os.Stat(path)
+			if statErr == nil {
+				if isHardlink, id := getHardlinkInfo(path, info); isHardlink {
+					status.TotalLinks++
+					status.ActiveLinks++
+					detail := SymlinkDetail{
+						Name:       d.Name(),
+						Path:       path,
+						Target:     "(hardlink)",
+						IsBroken:   false,
+						TargetSize: info.Size(),
+					}
+					if !countedTargets[id] {
+						countedTargets[id] = true
+						status.BytesSaved += info.Size()
+					}
+					status.Files = append(status.Files, detail)
+				}
+			}
 		}
 		return nil
 	})

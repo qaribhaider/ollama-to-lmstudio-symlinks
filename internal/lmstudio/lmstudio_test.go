@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -376,4 +377,92 @@ func TestDiscoverLMStudioModels_IncompleteShards(t *testing.T) {
 	if len(models) != 0 {
 		t.Fatalf("expected 0 models for missing shard 1, got %d", len(models))
 	}
+}
+
+func TestDiscoverLMStudioModels_Combinatorial(t *testing.T) {
+	tempDir := t.TempDir()
+	
+	// Namespace 1: TheBloke / Llama-3-70B-GGUF
+	// Contains: Sharded model with 2 quants (q4_0 and q8_0) sharing a projector
+	dir1 := filepath.Join(tempDir, "TheBloke", "Llama-3-70B-GGUF")
+	os.MkdirAll(dir1, 0755)
+	
+	// q4_0 sharded
+	writeSyntheticGGUF(t, filepath.Join(dir1, "llama-3-70b.q4_0-00001-of-00002.gguf"), "llama")
+	writeSyntheticGGUF(t, filepath.Join(dir1, "llama-3-70b.q4_0-00002-of-00002.gguf"), "llama")
+	
+	// q8_0 sharded
+	writeSyntheticGGUF(t, filepath.Join(dir1, "llama-3-70b.q8_0-00001-of-00002.gguf"), "llama")
+	writeSyntheticGGUF(t, filepath.Join(dir1, "llama-3-70b.q8_0-00002-of-00002.gguf"), "llama")
+	
+	// vision projector shared across quants
+	writeSyntheticGGUF(t, filepath.Join(dir1, "mmproj-llama-3-f16.gguf"), "clip")
+	
+	// Namespace 2: mlx-community / gemma-2b-it
+	// Contains: Standalone model and projector
+	dir2 := filepath.Join(tempDir, "mlx-community", "gemma-2b-it")
+	os.MkdirAll(dir2, 0755)
+	
+	writeSyntheticGGUF(t, filepath.Join(dir2, "gemma-2b-it-q4_k_m.gguf"), "gemma2")
+	writeSyntheticGGUF(t, filepath.Join(dir2, "mmproj-gemma-2b-it.gguf"), "clip")
+	
+	// Namespace 3: raw (no subfolder beyond author)
+	// Contains: Standalone model, no projector
+	dir3 := filepath.Join(tempDir, "raw-author")
+	os.MkdirAll(dir3, 0755)
+	writeSyntheticGGUF(t, filepath.Join(dir3, "standalone-model.gguf"), "qwen2")
+
+	// Run discovery
+	models, err := DiscoverLMStudioModels(tempDir, "ollama", false)
+	if err != nil {
+		t.Fatalf("DiscoverLMStudioModels failed: %v", err)
+	}
+
+	if len(models) != 4 {
+		t.Fatalf("Expected 4 models (2 sharded quants, 1 gemma standalone, 1 qwen standalone), got %d", len(models))
+	}
+	
+	// Verify models
+	foundLlamaQ4 := false
+	foundLlamaQ8 := false
+	foundGemma := false
+	foundQwen := false
+	
+	for _, m := range models {
+		if strings.Contains(m.Name, "llama-3-70b-q4_0") {
+			foundLlamaQ4 = true
+			if len(m.ShardPaths) != 1 {
+				t.Errorf("llama q4 expected 1 companion shard, got %d", len(m.ShardPaths))
+			}
+			if m.ProjectorPath == "" {
+				t.Errorf("llama q4 expected projector path, got empty")
+			}
+		} else if strings.Contains(m.Name, "llama-3-70b-q8_0") {
+			foundLlamaQ8 = true
+			if len(m.ShardPaths) != 1 {
+				t.Errorf("llama q8 expected 1 companion shard, got %d", len(m.ShardPaths))
+			}
+			if m.ProjectorPath == "" {
+				t.Errorf("llama q8 expected projector path, got empty")
+			}
+		} else if strings.Contains(m.Name, "gemma-2b-it") {
+			foundGemma = true
+			if len(m.ShardPaths) != 0 {
+				t.Errorf("gemma expected 0 companion shards, got %d", len(m.ShardPaths))
+			}
+			if m.ProjectorPath == "" {
+				t.Errorf("gemma expected projector path, got empty")
+			}
+		} else if strings.Contains(m.Name, "standalone-model") {
+			foundQwen = true
+			if m.ProjectorPath != "" {
+				t.Errorf("qwen expected no projector path, got %s", m.ProjectorPath)
+			}
+		}
+	}
+	
+	if !foundLlamaQ4 { t.Errorf("did not find llama q4") }
+	if !foundLlamaQ8 { t.Errorf("did not find llama q8") }
+	if !foundGemma { t.Errorf("did not find gemma") }
+	if !foundQwen { t.Errorf("did not find qwen") }
 }

@@ -173,6 +173,7 @@ func DiscoverModels(ollamaDir string, verbose bool) ([]models.ModelInfo, error) 
 				// For multimodal models like llava
 				// Ensure filename is safe for filesystem and follows LM Studio mmproj convention
 				safeProjectorName := strings.Replace(fullModelName, ":", "-", -1)
+				safeProjectorName = strings.ReplaceAll(safeProjectorName, "/", "-")
 				projectorName := fmt.Sprintf("mmproj-%s.gguf", safeProjectorName)
 				modelInfo.AdditionalBlobs[layer.Digest] = projectorName
 			}

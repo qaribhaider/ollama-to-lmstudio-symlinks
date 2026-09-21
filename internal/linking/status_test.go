@@ -100,3 +100,49 @@ func TestInspectDirectory(t *testing.T) {
 		t.Errorf("expected BytesSaved=%d, got %d", expectedBytes, st.BytesSaved)
 	}
 }
+
+func TestInspectDirectory_HardLinks(t *testing.T) {
+	tempDir := t.TempDir()
+
+	targetDir := filepath.Join(tempDir, "targets")
+	os.MkdirAll(targetDir, 0755)
+
+	target := filepath.Join(targetDir, "model.gguf")
+	os.WriteFile(target, make([]byte, 1024*1024), 0644) // 1MB
+
+	inspectDir := filepath.Join(tempDir, "managed")
+	os.MkdirAll(inspectDir, 0755)
+
+	// Hardlink 1
+	link1 := filepath.Join(inspectDir, "link1.gguf")
+	if err := os.Link(target, link1); err != nil {
+		t.Skipf("hardlinking not supported on this filesystem: %v", err)
+	}
+
+	// Hardlink 2
+	link2 := filepath.Join(inspectDir, "link2.gguf")
+	if err := os.Link(target, link2); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := InspectDirectory(inspectDir)
+	if err != nil {
+		t.Fatalf("InspectDirectory failed: %v", err)
+	}
+
+	if st.TotalLinks != 2 {
+		t.Errorf("expected TotalLinks=2, got %d", st.TotalLinks)
+	}
+	if st.ActiveLinks != 2 {
+		t.Errorf("expected ActiveLinks=2, got %d", st.ActiveLinks)
+	}
+	if st.BrokenLinks != 0 {
+		t.Errorf("expected BrokenLinks=0, got %d", st.BrokenLinks)
+	}
+
+	// BytesSaved should count target (1MB) once
+	expectedBytes := int64(1024 * 1024)
+	if st.BytesSaved != expectedBytes {
+		t.Errorf("expected BytesSaved=%d, got %d", expectedBytes, st.BytesSaved)
+	}
+}

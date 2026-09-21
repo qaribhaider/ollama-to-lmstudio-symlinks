@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/models"
+	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/ollama"
 )
 
 func TestCalculateSHA256(t *testing.T) {
@@ -591,3 +592,155 @@ func TestProcessLMStudioModel_Sharded_NewlineInjection(t *testing.T) {
 }
 
 
+
+
+func TestProcessLMStudioModel_Combinatorial(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping shell script mock on Windows")
+	}
+
+	ollamaDir := t.TempDir()
+	tempDir := t.TempDir()
+
+	baseFile := filepath.Join(tempDir, "model-00001-of-00002.gguf")
+	shardFile := filepath.Join(tempDir, "model-00002-of-00002.gguf")
+	projFile := filepath.Join(tempDir, "mmproj.gguf")
+
+	os.WriteFile(baseFile, []byte("base model data"), 0644)
+	os.WriteFile(shardFile, []byte("shard model data"), 0644)
+	os.WriteFile(projFile, []byte("projector data"), 0644)
+
+	mockOllama := filepath.Join(tempDir, "mock_ollama")
+	script := "#!/bin/sh\n" +
+		"if [ \"$1\" != \"create\" ]; then exit 1; fi\n" +
+		"if [ \"$3\" != \"-f\" ]; then exit 1; fi\n" +
+		"if [ \"$2\" != \"lms-hf.co-org-sharded-vision-model\" ]; then exit 1; fi\n" +
+		"content=$(cat \"$4\")\n" +
+		"echo \"$content\" | grep -F \"FROM " + baseFile + "\" >/dev/null || exit 1\n" +
+		"echo \"$content\" | grep -F \"FROM " + projFile + "\" >/dev/null || exit 1\n" +
+		"exit 0\n"
+
+	if err := os.WriteFile(mockOllama, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	model := models.LMStudioModel{
+		Name:          "hf.co/org/sharded-vision-model",
+		Path:          baseFile,
+		ShardPaths:    []string{shardFile},
+		ProjectorPath: projFile,
+	}
+
+	result := ProcessLMStudioModel(model, ollamaDir, "lms-", mockOllama, false, true, false)
+	if !result {
+		t.Fatal("ProcessLMStudioModel with combinatorial features failed")
+	}
+
+	baseHash, _ := CalculateSHA256(baseFile)
+	shardHash, _ := CalculateSHA256(shardFile)
+	projHash, _ := CalculateSHA256(projFile)
+
+	baseBlob := filepath.Join(ollamaDir, "blobs", "sha256-"+baseHash)
+	shardBlob := filepath.Join(ollamaDir, "blobs", "sha256-"+shardHash)
+	projBlob := filepath.Join(ollamaDir, "blobs", "sha256-"+projHash)
+
+	if fi, err := os.Lstat(baseBlob); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("expected base blob symlink at %s", baseBlob)
+	}
+	if fi, err := os.Lstat(shardBlob); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("expected shard blob symlink at %s", shardBlob)
+	}
+	if fi, err := os.Lstat(projBlob); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("expected projector blob symlink at %s", projBlob)
+	}
+}
+
+func TestProcessModel_Combinatorial(t *testing.T) {
+	ollamaDir := t.TempDir()
+	providerDir := t.TempDir()
+
+	blobsDir := filepath.Join(ollamaDir, "blobs")
+	os.MkdirAll(blobsDir, 0755)
+
+	shard1Hash := "sha256-shard1hash"
+	shard2Hash := "sha256-shard2hash"
+	projHash := "sha256-projhash"
+
+	os.WriteFile(filepath.Join(blobsDir, shard1Hash), []byte("shard 1"), 0644)
+	os.WriteFile(filepath.Join(blobsDir, shard2Hash), []byte("shard 2"), 0644)
+	os.WriteFile(filepath.Join(blobsDir, projHash), []byte("proj"), 0644)
+
+	model := models.ModelInfo{
+		Name:           "hf.co/org/sharded-vision-model",
+		MainModelBlobs: []string{"sha256:shard1hash", "sha256:shard2hash"},
+		AdditionalBlobs: map[string]string{
+			"sha256:projhash": "mmproj-hf.co-org-sharded-vision-model.gguf",
+		},
+	}
+
+	result := ProcessModel(model, ollamaDir, providerDir, false, true, false)
+	if !result {
+		t.Fatal("ProcessModel with combinatorial features failed")
+	}
+
+	modelDir := filepath.Join(providerDir, "hf.co-org-sharded-vision-model")
+
+	expectedFiles := []string{
+		"hf.co-org-sharded-vision-model-00001-of-00002.gguf",
+		"hf.co-org-sharded-vision-model-00002-of-00002.gguf",
+		"mmproj-hf.co-org-sharded-vision-model.gguf",
+	}
+
+	for _, f := range expectedFiles {
+		if fi, err := os.Lstat(filepath.Join(modelDir, f)); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			t.Errorf("expected symlink for %s", f)
+		}
+	}
+}
+
+func TestPipeline_NamespacedVisionModel_EndToEnd(t *testing.T) {
+	tempDir := t.TempDir()
+	ollamaDir := filepath.Join(tempDir, "ollama")
+	providerDir := filepath.Join(tempDir, "lmstudio", "models", "ollama")
+
+	manifestDir := filepath.Join(ollamaDir, "manifests", "hf.co", "bartowski", "Llama-3.2-Vision-GGUF")
+	blobsDir := filepath.Join(ollamaDir, "blobs")
+	os.MkdirAll(manifestDir, 0755)
+	os.MkdirAll(blobsDir, 0755)
+
+	modelDigest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	projDigest := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+	os.WriteFile(filepath.Join(blobsDir, "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), []byte("model-data"), 0644)
+	os.WriteFile(filepath.Join(blobsDir, "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"), []byte("projector-data"), 0644)
+
+	manifestJSON := `{"schemaVersion":2,"mediaType":"application/vnd.docker.distribution.manifest.v2+json","layers":[` +
+		`{"mediaType":"application/vnd.ollama.image.model","digest":"` + modelDigest + `","size":10},` +
+		`{"mediaType":"application/vnd.ollama.image.projector","digest":"` + projDigest + `","size":14}` +
+		`]}`
+	os.WriteFile(filepath.Join(manifestDir, "latest"), []byte(manifestJSON), 0644)
+
+	discovered, err := ollama.DiscoverModels(ollamaDir, false)
+	if err != nil {
+		t.Fatalf("DiscoverModels failed: %v", err)
+	}
+	if len(discovered) != 1 {
+		t.Fatalf("expected 1 model discovered, got %d", len(discovered))
+	}
+
+	ok := ProcessModel(discovered[0], ollamaDir, providerDir, false, false, false)
+	if !ok {
+		t.Fatalf("ProcessModel failed to link discovered namespaced vision model")
+	}
+
+	targetModelDir := filepath.Join(providerDir, "hf.co-bartowski-Llama-3.2-Vision-GGUF-latest")
+	expectedGGUF := filepath.Join(targetModelDir, "hf.co-bartowski-Llama-3.2-Vision-GGUF-latest.gguf")
+	expectedProj := filepath.Join(targetModelDir, "mmproj-hf.co-bartowski-Llama-3.2-Vision-GGUF-latest.gguf")
+
+	if fi, err := os.Lstat(expectedGGUF); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("expected GGUF symlink at %s", expectedGGUF)
+	}
+	if fi, err := os.Lstat(expectedProj); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("expected projector symlink at %s (Point #1 verification)", expectedProj)
+	}
+}

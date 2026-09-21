@@ -2,6 +2,7 @@ package ollama
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -268,5 +269,107 @@ func TestDiscoverModels_NamespacesAndRegistries(t *testing.T) {
 		if !expectedMap[m.Name] {
 			t.Errorf("unexpected model discovered: %s", m.Name)
 		}
+	}
+}
+
+func TestDiscoverModels_Combinations(t *testing.T) {
+	tempDir := t.TempDir()
+	manifestsDir := filepath.Join(tempDir, "manifests")
+
+	createManifest := func(relPath string, layerTypes []string) {
+		p := filepath.Join(manifestsDir, relPath)
+		os.MkdirAll(filepath.Dir(p), 0755)
+
+		var layers []struct {
+			MediaType string `json:"mediaType"`
+			Digest    string `json:"digest"`
+			Size      int64  `json:"size"`
+		}
+
+		for i, lt := range layerTypes {
+			// Generate a unique valid digest for each layer
+			digest := fmt.Sprintf("sha256:%064d", i+1)
+			layers = append(layers, struct {
+				MediaType string `json:"mediaType"`
+				Digest    string `json:"digest"`
+				Size      int64  `json:"size"`
+			}{
+				MediaType: lt,
+				Digest:    digest,
+			})
+		}
+
+		m := models.OllamaManifest{Layers: layers}
+		data, _ := json.Marshal(m)
+		os.WriteFile(p, data, 0644)
+	}
+
+	// 1. Namespaced vision model (hf.co/org/model:latest)
+	createManifest("hf.co/org/vision-model/latest", []string{
+		"application/vnd.ollama.image.model",
+		"application/vnd.ollama.image.projector",
+	})
+
+	// 2. Sharded GGUF model (registry.ollama.ai/library/sharded/latest)
+	createManifest("registry.ollama.ai/library/sharded/latest", []string{
+		"application/vnd.ollama.image.model",
+		"application/vnd.ollama.image.model",
+	})
+
+	// 3. Namespaced sharded vision model (customorg/sharded-vision/v1)
+	createManifest("registry.ollama.ai/customorg/sharded-vision/v1", []string{
+		"application/vnd.ollama.image.model",
+		"application/vnd.ollama.image.model",
+		"application/vnd.ollama.image.projector",
+	})
+
+	discovered, err := DiscoverModels(tempDir, true)
+	if err != nil {
+		t.Fatalf("DiscoverModels failed: %v", err)
+	}
+
+	if len(discovered) != 3 {
+		t.Fatalf("expected 3 models, got %d", len(discovered))
+	}
+
+	modelMap := make(map[string]models.ModelInfo)
+	for _, m := range discovered {
+		modelMap[m.Name] = m
+	}
+
+	// Verify Namespaced vision model
+	if m, ok := modelMap["hf.co/org/vision-model:latest"]; ok {
+		if len(m.MainModelBlobs) != 1 {
+			t.Errorf("expected 1 main blob for vision-model, got %d", len(m.MainModelBlobs))
+		}
+		// The projector name should have '/' replaced by '-'
+		expectedProj := "mmproj-hf.co-org-vision-model-latest.gguf"
+		if proj, exists := m.AdditionalBlobs["sha256:"+fmt.Sprintf("%064d", 2)]; !exists || proj != expectedProj {
+			t.Errorf("expected projector name %s, got %s", expectedProj, proj)
+		}
+	} else {
+		t.Errorf("missing model hf.co/org/vision-model:latest")
+	}
+
+	// Verify Sharded GGUF model
+	if m, ok := modelMap["sharded:latest"]; ok {
+		if len(m.MainModelBlobs) != 2 {
+			t.Errorf("expected 2 main blobs for sharded model, got %d", len(m.MainModelBlobs))
+		}
+	} else {
+		t.Errorf("missing model sharded:latest")
+	}
+
+	// Verify Namespaced sharded vision model
+	if m, ok := modelMap["customorg/sharded-vision:v1"]; ok {
+		if len(m.MainModelBlobs) != 2 {
+			t.Errorf("expected 2 main blobs for sharded-vision, got %d", len(m.MainModelBlobs))
+		}
+		expectedProj := "mmproj-customorg-sharded-vision-v1.gguf"
+		if proj, exists := m.AdditionalBlobs["sha256:"+fmt.Sprintf("%064d", 3)]; !exists || proj != expectedProj {
+			t.Errorf("expected projector name %s, got %s", expectedProj, proj)
+		}
+	} else {
+		t.Errorf("missing model customorg/sharded-vision:v1")
 	}
 }
