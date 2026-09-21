@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test-and-build:
+    name: Test and Build (Linux)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache-dependency-path: go.sum
+
+      - name: Run Tests
+        run: go test -v ./...
+
+      - name: Verify Build
+        run: |
+          VERSION=$(cat VERSION)
+          go build -ldflags="-X 'main.Version=$VERSION'" -o ollama-symlinks ./cmd/ollama-symlinks
+          ./ollama-symlinks --version

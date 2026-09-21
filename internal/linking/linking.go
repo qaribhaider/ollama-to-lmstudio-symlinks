@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/models"
+	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/ollama"
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/ui"
 )
 
@@ -241,7 +242,15 @@ func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, d
 	return true
 }
 
-func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix string, dryRun, verbose, useHardlinks bool) bool {
+func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix, ollamaBin string, dryRun, verbose, useHardlinks bool) bool {
+	if ollamaBin == "" {
+		if resolved, err := ollama.GetOllamaExecutable(); err == nil && resolved != "" {
+			ollamaBin = resolved
+		} else {
+			ollamaBin = "ollama"
+		}
+	}
+
 	ui.PrintInfo(fmt.Sprintf("PROCESSING: %s", model.Name))
 
 	if verbose {
@@ -363,7 +372,7 @@ func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix stri
 
 		// G204: both ollamaModelName and tmpPath are sanitized/cleaned.
 		// Go's exec.Command passes arguments directly to OS, preventing shell injection.
-		cmd := exec.Command("ollama", "create", ollamaModelName, "-f", tmpPath)
+		cmd := exec.Command(ollamaBin, "create", ollamaModelName, "-f", tmpPath)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			ui.PrintError(fmt.Sprintf("'ollama create' failed: %v\nOutput: %s", err, string(output)))

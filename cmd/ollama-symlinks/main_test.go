@@ -2,9 +2,13 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/lmstudio"
+	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/ollama"
 )
 
 func TestRunApp_Validation(t *testing.T) {
@@ -85,3 +89,217 @@ func TestRunApp_Version(t *testing.T) {
 		t.Errorf("runApp(--version) error = %v", err)
 	}
 }
+
+func TestRunApp_PreFlight_Reverse_Blocking(t *testing.T) {
+	oldLookPath := ollama.LookPathFunc
+	oldPlatformPaths := ollama.PlatformPathsFunc
+	defer func() {
+		ollama.LookPathFunc = oldLookPath
+		ollama.PlatformPathsFunc = oldPlatformPaths
+	}()
+
+	ollama.LookPathFunc = func(file string) (string, error) {
+		return "", exec.ErrNotFound
+	}
+	ollama.PlatformPathsFunc = func() []string { return nil }
+
+	tempDir := t.TempDir()
+	lmsDir := filepath.Join(tempDir, "lmstudio", "models")
+	ollamaDir := filepath.Join(tempDir, "ollama", "models")
+	os.MkdirAll(lmsDir, 0755)
+	os.MkdirAll(ollamaDir, 0755)
+
+	err := runApp([]string{
+		"--interactive=false",
+		"--reverse",
+		"--lmstudio-dir", lmsDir,
+		"--ollama-dir", ollamaDir,
+	}, strings.NewReader(""))
+
+	if err == nil {
+		t.Fatal("expected blocking validation error, got nil")
+	}
+	if !strings.Contains(err.Error(), "blocking validation error: 'ollama' executable not found") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestRunApp_PreFlight_Reverse_SkipChecks(t *testing.T) {
+	oldLookPath := ollama.LookPathFunc
+	oldPlatformPaths := ollama.PlatformPathsFunc
+	defer func() {
+		ollama.LookPathFunc = oldLookPath
+		ollama.PlatformPathsFunc = oldPlatformPaths
+	}()
+
+	ollama.LookPathFunc = func(file string) (string, error) {
+		return "", exec.ErrNotFound
+	}
+	ollama.PlatformPathsFunc = func() []string { return nil }
+
+	tempDir := t.TempDir()
+	lmsDir := filepath.Join(tempDir, "lmstudio", "models")
+	ollamaDir := filepath.Join(tempDir, "ollama", "models")
+	os.MkdirAll(lmsDir, 0755)
+	os.MkdirAll(ollamaDir, 0755)
+
+	// With --skip-checks and --dry-run, it should bypass the pre-flight block
+	err := runApp([]string{
+		"--interactive=false",
+		"--reverse",
+		"--skip-checks",
+		"--dry-run",
+		"--lmstudio-dir", lmsDir,
+		"--ollama-dir", ollamaDir,
+	}, strings.NewReader(""))
+
+	if err != nil {
+		t.Fatalf("expected nil error with --skip-checks, got %v", err)
+	}
+}
+
+func TestRunApp_PreFlight_DeleteOllama_Blocking(t *testing.T) {
+	oldLookPath := ollama.LookPathFunc
+	oldPlatformPaths := ollama.PlatformPathsFunc
+	defer func() {
+		ollama.LookPathFunc = oldLookPath
+		ollama.PlatformPathsFunc = oldPlatformPaths
+	}()
+
+	ollama.LookPathFunc = func(file string) (string, error) {
+		return "", exec.ErrNotFound
+	}
+	ollama.PlatformPathsFunc = func() []string { return nil }
+
+	tempDir := t.TempDir()
+	ollamaDir := filepath.Join(tempDir, "ollama", "models")
+	os.MkdirAll(filepath.Join(ollamaDir, "manifests"), 0755)
+	os.MkdirAll(filepath.Join(ollamaDir, "blobs"), 0755)
+
+	err := runApp([]string{
+		"--interactive=false",
+		"--ollama-dir", ollamaDir,
+		"delete",
+		"--from", "ollama",
+	}, strings.NewReader(""))
+
+	if err == nil {
+		t.Fatal("expected blocking validation error, got nil")
+	}
+	if !strings.Contains(err.Error(), "blocking validation error: 'ollama' executable not found") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestRunApp_PreFlight_DeleteOllama_SkipChecks(t *testing.T) {
+	oldLookPath := ollama.LookPathFunc
+	oldPlatformPaths := ollama.PlatformPathsFunc
+	defer func() {
+		ollama.LookPathFunc = oldLookPath
+		ollama.PlatformPathsFunc = oldPlatformPaths
+	}()
+
+	ollama.LookPathFunc = func(file string) (string, error) {
+		return "", exec.ErrNotFound
+	}
+	ollama.PlatformPathsFunc = func() []string { return nil }
+
+	tempDir := t.TempDir()
+	ollamaDir := filepath.Join(tempDir, "ollama", "models")
+	os.MkdirAll(filepath.Join(ollamaDir, "manifests"), 0755)
+	os.MkdirAll(filepath.Join(ollamaDir, "blobs"), 0755)
+
+	err := runApp([]string{
+		"--interactive=false",
+		"--skip-checks",
+		"--dry-run",
+		"--ollama-dir", ollamaDir,
+		"delete",
+		"--from", "ollama",
+	}, strings.NewReader(""))
+
+	if err != nil {
+		t.Fatalf("expected nil error when empty and skip-checks, got %v", err)
+	}
+}
+
+func TestRunApp_PreFlight_Forward_LMStudio_Blocking(t *testing.T) {
+	oldOllamaLookPath := ollama.LookPathFunc
+	defer func() { ollama.LookPathFunc = oldOllamaLookPath }()
+	ollama.LookPathFunc = func(file string) (string, error) {
+		return "/mock/ollama", nil
+	}
+
+	oldLMSLookPath := lmstudio.LookPathFunc
+	oldLMSPlatform := lmstudio.PlatformPathsFunc
+	oldLMSCandidates := lmstudio.CandidatesFunc
+	defer func() {
+		lmstudio.LookPathFunc = oldLMSLookPath
+		lmstudio.PlatformPathsFunc = oldLMSPlatform
+		lmstudio.CandidatesFunc = oldLMSCandidates
+	}()
+	lmstudio.LookPathFunc = func(file string) (string, error) {
+		return "", exec.ErrNotFound
+	}
+	lmstudio.PlatformPathsFunc = func() []string { return nil }
+	lmstudio.CandidatesFunc = func() []string { return nil }
+
+	tempDir := t.TempDir()
+	ollamaDir := filepath.Join(tempDir, "ollama", "models")
+	os.MkdirAll(ollamaDir, 0755)
+	nonExistentLMSDir := filepath.Join(tempDir, "non-existent-lms", "models")
+
+	err := runApp([]string{
+		"--interactive=false",
+		"--ollama-dir", ollamaDir,
+		"--lmstudio-dir", nonExistentLMSDir,
+	}, strings.NewReader(""))
+
+	if err == nil {
+		t.Fatal("expected blocking validation error for LM Studio, got nil")
+	}
+	if !strings.Contains(err.Error(), "blocking validation error: LM Studio installation or models directory not found") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestRunApp_PreFlight_Forward_LMStudio_SkipChecks(t *testing.T) {
+	oldOllamaLookPath := ollama.LookPathFunc
+	defer func() { ollama.LookPathFunc = oldOllamaLookPath }()
+	ollama.LookPathFunc = func(file string) (string, error) {
+		return "/mock/ollama", nil
+	}
+
+	oldLMSLookPath := lmstudio.LookPathFunc
+	oldLMSPlatform := lmstudio.PlatformPathsFunc
+	oldLMSCandidates := lmstudio.CandidatesFunc
+	defer func() {
+		lmstudio.LookPathFunc = oldLMSLookPath
+		lmstudio.PlatformPathsFunc = oldLMSPlatform
+		lmstudio.CandidatesFunc = oldLMSCandidates
+	}()
+	lmstudio.LookPathFunc = func(file string) (string, error) {
+		return "", exec.ErrNotFound
+	}
+	lmstudio.PlatformPathsFunc = func() []string { return nil }
+	lmstudio.CandidatesFunc = func() []string { return nil }
+
+	tempDir := t.TempDir()
+	ollamaDir := filepath.Join(tempDir, "ollama", "models")
+	os.MkdirAll(filepath.Join(ollamaDir, "manifests"), 0755)
+	nonExistentLMSDir := filepath.Join(tempDir, "non-existent-lms", "models")
+
+	err := runApp([]string{
+		"--interactive=false",
+		"--skip-checks",
+		"--dry-run",
+		"--ollama-dir", ollamaDir,
+		"--lmstudio-dir", nonExistentLMSDir,
+	}, strings.NewReader(""))
+
+	if err != nil {
+		t.Fatalf("expected nil error with --skip-checks, got %v", err)
+	}
+}
+
+
