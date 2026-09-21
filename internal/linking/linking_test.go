@@ -3,6 +3,7 @@ package linking
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/models"
@@ -313,4 +314,132 @@ func TestProcessLMStudioModel_ExecutionFailure(t *testing.T) {
 		t.Errorf("expected ProcessLMStudioModel to return false on execution failure, got true")
 	}
 }
+
+func TestProcessLMStudioModel_VisionProjector_DryRun(t *testing.T) {
+	ollamaDir := t.TempDir()
+	tempDir := t.TempDir()
+
+	baseFile := filepath.Join(tempDir, "model.gguf")
+	os.WriteFile(baseFile, []byte("base model data"), 0644)
+
+	projFile := filepath.Join(tempDir, "mmproj.gguf")
+	os.WriteFile(projFile, []byte("projector data"), 0644)
+
+	model := models.LMStudioModel{
+		Name:          "vision-model",
+		Path:          baseFile,
+		ProjectorPath: projFile,
+	}
+
+	result := ProcessLMStudioModel(model, ollamaDir, "lms", "", true, true, false)
+	if !result {
+		t.Fatal("ProcessLMStudioModel dry run with projector failed")
+	}
+
+	// Verify no blobs were created
+	blobsDir := filepath.Join(ollamaDir, "blobs")
+	if entries, err := os.ReadDir(blobsDir); err == nil && len(entries) > 0 {
+		t.Errorf("expected blobs to be empty in dry run, got %d entries", len(entries))
+	}
+}
+
+func TestProcessLMStudioModel_VisionProjector_Success(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping shell script mock on Windows")
+	}
+
+	ollamaDir := t.TempDir()
+	tempDir := t.TempDir()
+
+	baseFile := filepath.Join(tempDir, "model.gguf")
+	os.WriteFile(baseFile, []byte("base model data"), 0644)
+
+	projFile := filepath.Join(tempDir, "mmproj.gguf")
+	os.WriteFile(projFile, []byte("projector data"), 0644)
+
+	// Create mock ollama binary that verifies the Modelfile contents
+	mockOllama := filepath.Join(tempDir, "mock_ollama")
+	script := `#!/bin/sh
+# $1=create $2=model_name $3=-f $4=modelfile
+if [ "$1" != "create" ]; then
+    echo "unexpected command $1" >&2
+    exit 1
+fi
+if [ "$3" != "-f" ]; then
+    echo "expected -f flag" >&2
+    exit 1
+fi
+content=$(cat "$4")
+echo "$content" | grep -F "FROM ` + baseFile + `" >/dev/null || { echo "missing base FROM" >&2; exit 1; }
+echo "$content" | grep -F "FROM ` + projFile + `" >/dev/null || { echo "missing projector FROM" >&2; exit 1; }
+exit 0
+`
+	if err := os.WriteFile(mockOllama, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	model := models.LMStudioModel{
+		Name:          "vision-model",
+		Path:          baseFile,
+		ProjectorPath: projFile,
+	}
+
+	result := ProcessLMStudioModel(model, ollamaDir, "lms", mockOllama, false, true, false)
+	if !result {
+		t.Fatal("ProcessLMStudioModel with projector failed")
+	}
+
+	// Verify both blobs were created as symlinks
+	baseHash, _ := CalculateSHA256(baseFile)
+	projHash, _ := CalculateSHA256(projFile)
+
+	baseBlob := filepath.Join(ollamaDir, "blobs", "sha256-"+baseHash)
+	projBlob := filepath.Join(ollamaDir, "blobs", "sha256-"+projHash)
+
+	if fi, err := os.Lstat(baseBlob); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("expected base blob symlink at %s", baseBlob)
+	}
+	if fi, err := os.Lstat(projBlob); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("expected projector blob symlink at %s", projBlob)
+	}
+}
+
+func TestProcessLMStudioModel_VisionProjector_NewlineInjection(t *testing.T) {
+	ollamaDir := t.TempDir()
+	tempDir := t.TempDir()
+
+	baseFile := filepath.Join(tempDir, "model.gguf")
+	os.WriteFile(baseFile, []byte("base model data"), 0644)
+
+	model := models.LMStudioModel{
+		Name:          "vision-model",
+		Path:          baseFile,
+		ProjectorPath: "/path/with/newline\n/proj.gguf",
+	}
+
+	result := ProcessLMStudioModel(model, ollamaDir, "lms", "", false, false, false)
+	if result {
+		t.Errorf("expected newline in projector path to be rejected, got true")
+	}
+}
+
+func TestProcessLMStudioModel_VisionProjector_MissingProjector(t *testing.T) {
+	ollamaDir := t.TempDir()
+	tempDir := t.TempDir()
+
+	baseFile := filepath.Join(tempDir, "model.gguf")
+	os.WriteFile(baseFile, []byte("base model data"), 0644)
+
+	model := models.LMStudioModel{
+		Name:          "vision-model",
+		Path:          baseFile,
+		ProjectorPath: "/non/existent/mmproj.gguf",
+	}
+
+	result := ProcessLMStudioModel(model, ollamaDir, "lms", "", false, false, false)
+	if result {
+		t.Errorf("expected missing projector file to return false, got true")
+	}
+}
+
 
