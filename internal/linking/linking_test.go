@@ -97,7 +97,7 @@ func TestProcessModel(t *testing.T) {
 		Name:           "test-model-latest",
 		MainModelBlobs: []string{"sha256:blob11111"},
 		AdditionalBlobs: map[string]string{
-			"sha256:blob22222": "test-model-latest-projector.bin",
+			"sha256:blob22222": "mmproj-test-model-latest.gguf",
 		},
 	}
 
@@ -122,13 +122,58 @@ func TestProcessModel(t *testing.T) {
 		t.Errorf("Target is not a symbolic link: %s", mainSymlink)
 	}
 
-	projectorSymlink := filepath.Join(modelDir, "test-model-latest-projector.bin")
+	projectorSymlink := filepath.Join(modelDir, "mmproj-test-model-latest.gguf")
 	infoProj, err := os.Lstat(projectorSymlink)
 	if err != nil {
 		t.Fatalf("Projector symlink was not created: %v", err)
 	}
 	if infoProj.Mode()&os.ModeSymlink == 0 {
 		t.Errorf("Target is not a symbolic link: %s", projectorSymlink)
+	}
+}
+
+func TestProcessModel_Sharded_Idempotency(t *testing.T) {
+	tempDir := t.TempDir()
+	ollamaDir := filepath.Join(tempDir, "ollama")
+	blobsDir := filepath.Join(ollamaDir, "blobs")
+	os.MkdirAll(blobsDir, 0755)
+
+	shard1Blob := filepath.Join(blobsDir, "sha256-shard111")
+	shard2Blob := filepath.Join(blobsDir, "sha256-shard222")
+	os.WriteFile(shard1Blob, []byte("shard 1"), 0644)
+	os.WriteFile(shard2Blob, []byte("shard 2"), 0644)
+
+	providerDir := filepath.Join(tempDir, "lmstudio", "ollama")
+
+	model := models.ModelInfo{
+		Name: "sharded-model:latest",
+		MainModelBlobs: []string{
+			"sha256:shard111",
+			"sha256:shard222",
+		},
+	}
+
+	// 1. First run should create the sharded links
+	res1 := ProcessModel(model, ollamaDir, providerDir, false, false, false)
+	if !res1 {
+		t.Fatal("first run of ProcessModel for sharded model failed")
+	}
+
+	modelDir := filepath.Join(providerDir, "sharded-model-latest")
+	shard1Link := filepath.Join(modelDir, "sharded-model-latest-00001-of-00002.gguf")
+	shard2Link := filepath.Join(modelDir, "sharded-model-latest-00002-of-00002.gguf")
+
+	if fi, err := os.Lstat(shard1Link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("expected shard 1 symlink at %s", shard1Link)
+	}
+	if fi, err := os.Lstat(shard2Link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("expected shard 2 symlink at %s", shard2Link)
+	}
+
+	// 2. Second run should detect existing links and return false (skipped/idempotent), not error!
+	res2 := ProcessModel(model, ollamaDir, providerDir, false, false, false)
+	if res2 {
+		t.Errorf("second run expected to return false (already exists), got true")
 	}
 }
 
@@ -439,6 +484,109 @@ func TestProcessLMStudioModel_VisionProjector_MissingProjector(t *testing.T) {
 	result := ProcessLMStudioModel(model, ollamaDir, "lms", "", false, false, false)
 	if result {
 		t.Errorf("expected missing projector file to return false, got true")
+	}
+}
+
+func TestProcessLMStudioModel_Sharded_DryRun(t *testing.T) {
+	ollamaDir := t.TempDir()
+	tempDir := t.TempDir()
+
+	shard1 := filepath.Join(tempDir, "model-00001-of-00002.gguf")
+	shard2 := filepath.Join(tempDir, "model-00002-of-00002.gguf")
+	os.WriteFile(shard1, []byte("shard 1 content"), 0644)
+	os.WriteFile(shard2, []byte("shard 2 content"), 0644)
+
+	model := models.LMStudioModel{
+		Name:       "sharded-model",
+		Path:       shard1,
+		ShardPaths: []string{shard2},
+	}
+
+	result := ProcessLMStudioModel(model, ollamaDir, "lms", "", true, true, false)
+	if !result {
+		t.Fatal("expected ProcessLMStudioModel sharded dry run to succeed")
+	}
+
+	// In dry-run, no blobs should have been created on disk
+	blobsDir := filepath.Join(ollamaDir, "blobs")
+	if entries, err := os.ReadDir(blobsDir); err == nil && len(entries) > 0 {
+		t.Errorf("expected no blobs created in dry-run, found %d", len(entries))
+	}
+}
+
+func TestProcessLMStudioModel_Sharded_Success(t *testing.T) {
+	ollamaDir := t.TempDir()
+	tempDir := t.TempDir()
+
+	shard1 := filepath.Join(tempDir, "model-00001-of-00002.gguf")
+	shard2 := filepath.Join(tempDir, "model-00002-of-00002.gguf")
+	os.WriteFile(shard1, []byte("shard 1 payload"), 0644)
+	os.WriteFile(shard2, []byte("shard 2 payload"), 0644)
+
+	// Create mock ollama executable
+	mockOllama := filepath.Join(tempDir, "ollama")
+	var scriptContent string
+	if os.Getenv("OS") == "Windows_NT" {
+		scriptContent = "@echo off\r\nexit /b 0\r\n"
+		mockOllama += ".bat"
+	} else {
+		scriptContent = "#!/bin/sh\nexit 0\n"
+	}
+	if err := os.WriteFile(mockOllama, []byte(scriptContent), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	model := models.LMStudioModel{
+		Name:       "sharded-model",
+		Path:       shard1,
+		ShardPaths: []string{shard2},
+	}
+
+	result := ProcessLMStudioModel(model, ollamaDir, "lms", mockOllama, false, true, false)
+	if !result {
+		t.Fatal("expected ProcessLMStudioModel with shards to succeed")
+	}
+
+	// Verify both shard 1 and shard 2 blobs exist in ollamaDir/blobs
+	hash1, err := CalculateSHA256(shard1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash2, err := CalculateSHA256(shard2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	blob1 := filepath.Join(ollamaDir, "blobs", "sha256-"+hash1)
+	blob2 := filepath.Join(ollamaDir, "blobs", "sha256-"+hash2)
+
+	info1, err := os.Lstat(blob1)
+	if err != nil || (info1.Mode()&os.ModeSymlink == 0) {
+		t.Errorf("expected shard 1 blob symlink at %s", blob1)
+	}
+
+	info2, err := os.Lstat(blob2)
+	if err != nil || (info2.Mode()&os.ModeSymlink == 0) {
+		t.Errorf("expected shard 2 blob symlink at %s", blob2)
+	}
+}
+
+func TestProcessLMStudioModel_Sharded_NewlineInjection(t *testing.T) {
+	ollamaDir := t.TempDir()
+	tempDir := t.TempDir()
+
+	shard1 := filepath.Join(tempDir, "model-00001-of-00002.gguf")
+	os.WriteFile(shard1, []byte("shard 1 content"), 0644)
+
+	model := models.LMStudioModel{
+		Name:       "sharded-model",
+		Path:       shard1,
+		ShardPaths: []string{"/bad/path\n/shard2.gguf"},
+	}
+
+	result := ProcessLMStudioModel(model, ollamaDir, "lms", "", false, false, false)
+	if result {
+		t.Errorf("expected newline in shard path to be rejected, got true")
 	}
 }
 

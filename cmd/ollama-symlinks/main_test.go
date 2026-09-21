@@ -302,4 +302,103 @@ func TestRunApp_PreFlight_Forward_LMStudio_SkipChecks(t *testing.T) {
 	}
 }
 
+func TestRunApp_Status(t *testing.T) {
+	tempDir := t.TempDir()
+	ollamaDir := filepath.Join(tempDir, "ollama", "models")
+	lmsDir := filepath.Join(tempDir, "lmstudio", "models")
+	os.MkdirAll(filepath.Join(ollamaDir, "blobs"), 0755)
+	os.MkdirAll(filepath.Join(lmsDir, "ollama"), 0755)
+
+	// Create a dummy model file and symlink
+	realModel := filepath.Join(tempDir, "real.gguf")
+	os.WriteFile(realModel, make([]byte, 1024), 0644)
+
+	link := filepath.Join(lmsDir, "ollama", "test-model.gguf")
+	if err := os.Symlink(realModel, link); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runApp([]string{
+		"status",
+		"--ollama-dir", ollamaDir,
+		"--lmstudio-dir", lmsDir,
+		"--verbose",
+	}, strings.NewReader(""))
+
+	if err != nil {
+		t.Fatalf("runApp(status) returned error: %v", err)
+	}
+}
+
+func TestRunApp_Cleanup_DualDirectory(t *testing.T) {
+	tempDir := t.TempDir()
+	ollamaDir := filepath.Join(tempDir, "ollama", "models")
+	lmsDir := filepath.Join(tempDir, "lmstudio", "models")
+	blobsDir := filepath.Join(ollamaDir, "blobs")
+	lmsManagedDir := filepath.Join(lmsDir, "ollama")
+	os.MkdirAll(blobsDir, 0755)
+	os.MkdirAll(lmsManagedDir, 0755)
+
+	// Create broken symlink in LM Studio
+	brokenLMS := filepath.Join(lmsManagedDir, "broken-lms.gguf")
+	os.Symlink(filepath.Join(tempDir, "missing-blob.bin"), brokenLMS)
+
+	// Create broken symlink in Ollama blobs
+	brokenBlob := filepath.Join(blobsDir, "sha256-missing")
+	os.Symlink(filepath.Join(tempDir, "missing-model.gguf"), brokenBlob)
+
+	// Test cleanup in dry-run mode
+	err := runApp([]string{
+		"cleanup",
+		"--dry-run",
+		"--ollama-dir", ollamaDir,
+		"--lmstudio-dir", lmsDir,
+	}, strings.NewReader(""))
+
+	if err != nil {
+		t.Fatalf("runApp(cleanup --dry-run) error = %v", err)
+	}
+
+	// Symlinks should still exist after dry-run
+	if _, err := os.Lstat(brokenLMS); err != nil {
+		t.Errorf("expected broken LMS link to exist after dry-run")
+	}
+	if _, err := os.Lstat(brokenBlob); err != nil {
+		t.Errorf("expected broken blob link to exist after dry-run")
+	}
+}
+
+func TestRunApp_Delete_NamePrefix(t *testing.T) {
+	oldLookPath := ollama.LookPathFunc
+	oldPlatformPaths := ollama.PlatformPathsFunc
+	defer func() {
+		ollama.LookPathFunc = oldLookPath
+		ollama.PlatformPathsFunc = oldPlatformPaths
+	}()
+
+	ollama.LookPathFunc = func(file string) (string, error) {
+		return "/mock/ollama", nil
+	}
+	ollama.PlatformPathsFunc = func() []string { return nil }
+
+	tempDir := t.TempDir()
+	ollamaDir := filepath.Join(tempDir, "ollama", "models")
+	os.MkdirAll(filepath.Join(ollamaDir, "manifests"), 0755)
+	os.MkdirAll(filepath.Join(ollamaDir, "blobs"), 0755)
+
+	// Test delete with custom name-prefix in dry-run
+	err := runApp([]string{
+		"--interactive=false",
+		"--ollama-dir", ollamaDir,
+		"delete",
+		"--from", "ollama",
+		"--name-prefix", "custom-prefix",
+		"--dry-run",
+	}, strings.NewReader(""))
+
+	if err != nil {
+		t.Fatalf("runApp(delete --name-prefix custom-prefix) error = %v", err)
+	}
+}
+
 

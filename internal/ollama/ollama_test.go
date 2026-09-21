@@ -145,8 +145,8 @@ func TestDiscoverModels(t *testing.T) {
 	if len(model.MainModelBlobs) == 0 || model.MainModelBlobs[0] != "sha256:"+strings.Repeat("1", 64) {
 		t.Errorf("Expected main model blob sha256:111..., got %v", model.MainModelBlobs)
 	}
-	// Projector name uses - instead of :
-	expectedProjectorName := "test-model-latest-projector.bin"
+	// Projector name uses mmproj- prefix and .gguf extension
+	expectedProjectorName := "mmproj-test-model-latest.gguf"
 	if model.AdditionalBlobs["sha256:"+strings.Repeat("2", 64)] != expectedProjectorName {
 		t.Errorf("Expected projector name %s, got %s", expectedProjectorName, model.AdditionalBlobs["sha256:"+strings.Repeat("2", 64)])
 	}
@@ -207,5 +207,66 @@ func TestDiscoverModelsResilience(t *testing.T) {
 
 	if discoveredModels[0].Name != "mlx-model:latest" {
 		t.Errorf("Expected mlx-model:latest, got %s", discoveredModels[0].Name)
+	}
+}
+
+func TestDiscoverModels_NamespacesAndRegistries(t *testing.T) {
+	tempDir := t.TempDir()
+	manifestsDir := filepath.Join(tempDir, "manifests")
+
+	createManifest := func(relPath string) {
+		p := filepath.Join(manifestsDir, relPath)
+		os.MkdirAll(filepath.Dir(p), 0755)
+		m := models.OllamaManifest{
+			Layers: []struct {
+				MediaType string `json:"mediaType"`
+				Digest    string `json:"digest"`
+				Size      int64  `json:"size"`
+			}{
+				{
+					MediaType: "application/vnd.ollama.image.model",
+					Digest:    "sha256:" + strings.Repeat("a", 64),
+				},
+			},
+		}
+		data, _ := json.Marshal(m)
+		os.WriteFile(p, data, 0644)
+	}
+
+	// 1. Standard library model
+	createManifest("registry.ollama.ai/library/llama3/latest")
+
+	// 2. Custom author namespace under registry.ollama.ai
+	createManifest("registry.ollama.ai/myuser/custommodel/v1")
+
+	// 3. Hugging Face model
+	createManifest("hf.co/bartowski/Llama-3.2-3B-Instruct-GGUF/latest")
+
+	// 4. Direct 2-segment model
+	createManifest("directmodel/latest")
+
+	// 5. Stray 1-segment file in manifests root (should be skipped without error)
+	os.WriteFile(filepath.Join(manifestsDir, "stray.txt"), []byte("not a model"), 0644)
+
+	discovered, err := DiscoverModels(tempDir, true)
+	if err != nil {
+		t.Fatalf("DiscoverModels failed: %v", err)
+	}
+
+	expectedMap := map[string]bool{
+		"llama3:latest":                              true,
+		"myuser/custommodel:v1":                      true,
+		"hf.co/bartowski/Llama-3.2-3B-Instruct-GGUF:latest": true,
+		"directmodel:latest":                         true,
+	}
+
+	if len(discovered) != len(expectedMap) {
+		t.Fatalf("expected %d models, got %d", len(expectedMap), len(discovered))
+	}
+
+	for _, m := range discovered {
+		if !expectedMap[m.Name] {
+			t.Errorf("unexpected model discovered: %s", m.Name)
+		}
 	}
 }
