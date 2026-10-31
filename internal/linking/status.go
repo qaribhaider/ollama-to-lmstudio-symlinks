@@ -75,7 +75,11 @@ func InspectDirectory(dir string) (DirStatus, error) {
 			} else {
 				status.ActiveLinks++
 				detail.TargetSize = targetInfo.Size()
+				// Resolve the whole chain so two links reaching one file count once.
 				canonicalTarget := filepath.Clean(targetPath)
+				if resolved, err := filepath.EvalSymlinks(path); err == nil {
+					canonicalTarget = resolved
+				}
 				if !countedTargets[canonicalTarget] {
 					countedTargets[canonicalTarget] = true
 					status.BytesSaved += targetInfo.Size()
