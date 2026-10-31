@@ -13,28 +13,28 @@ import (
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/ui"
 )
 
-func runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider string, dryRun, verbose, useHardlinks, interactive, skipChecks bool) error {
+func runReverse(o options) error {
 	ui.PrintHeader("LM Studio → Ollama Linker")
-	ui.PrintInfo(fmt.Sprintf("LM Studio directory: %s", lmstudioDir))
-	ui.PrintInfo(fmt.Sprintf("Target Ollama directory: %s", ollamaDir))
-	if dryRun {
+	ui.PrintInfo(fmt.Sprintf("LM Studio directory: %s", o.lmstudioDir))
+	ui.PrintInfo(fmt.Sprintf("Target Ollama directory: %s", o.ollamaDir))
+	if o.dryRun {
 		ui.PrintWarning("DRY RUN MODE - No changes will be made")
 	}
 	ui.PrintEmptyLine()
 
 	// Pre-flight check: validate Ollama CLI
-	ollamaBin, err := ollama.ValidateOllama(skipChecks)
+	ollamaBin, err := ollama.ValidateOllama(o.skipChecks)
 	if err != nil {
 		return err
 	}
 
 	// Pre-flight check: validate LM Studio
-	if err := lmstudio.ValidateLMStudio(skipChecks, lmstudioDir); err != nil {
+	if err := lmstudio.ValidateLMStudio(o.skipChecks, o.lmstudioDir); err != nil {
 		return err
 	}
 
 	// Discover models
-	discoveredModels, err := lmstudio.DiscoverLMStudioModels(lmstudioDir, skipProvider, verbose)
+	discoveredModels, err := lmstudio.DiscoverLMStudioModels(o.lmstudioDir, o.skipProvider, o.verbose)
 	if err != nil {
 		return fmt.Errorf("error discovering models: %w", err)
 	}
@@ -43,7 +43,7 @@ func runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider string, dryRun,
 		return errors.New("no eligible models found in LM Studio directory")
 	}
 
-	if interactive {
+	if o.interactive {
 		var options []huh.Option[string]
 		for _, m := range discoveredModels {
 			label := m.Name
@@ -102,7 +102,7 @@ func runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider string, dryRun,
 	// Process each model
 	var created, skipped int
 	for _, model := range discoveredModels {
-		result := linking.ProcessLMStudioModel(model, ollamaDir, namePrefix, ollamaBin, dryRun, verbose, useHardlinks)
+		result := linking.ProcessLMStudioModel(model, o.ollamaDir, o.namePrefix, ollamaBin, o.dryRun, o.verbose, o.useHardlinks)
 		if result {
 			created++
 		} else {
@@ -117,8 +117,8 @@ func runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider string, dryRun,
 		fmt.Sprintf("Skipped: %d", skipped),
 	))
 
-	if created > 0 && !dryRun {
-		ui.PrintSuccess(fmt.Sprintf("Models are now available in Ollama with the '%s-' prefix", namePrefix))
+	if created > 0 && !o.dryRun {
+		ui.PrintSuccess(fmt.Sprintf("Models are now available in Ollama with the '%s-' prefix", o.namePrefix))
 	}
 	return nil
 }
