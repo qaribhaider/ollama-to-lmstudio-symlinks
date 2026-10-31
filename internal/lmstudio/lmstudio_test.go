@@ -26,8 +26,7 @@ func TestGetDefaultDirs(t *testing.T) {
 	// Test LMSTUDIO_MODELS env var
 	customPath := filepath.Join(t.TempDir(), "custom", "lm-studio", "models")
 	os.MkdirAll(customPath, 0755)
-	os.Setenv("LMSTUDIO_MODELS", customPath)
-	defer os.Unsetenv("LMSTUDIO_MODELS")
+	t.Setenv("LMSTUDIO_MODELS", customPath)
 
 	lmStudioDir = GetDefaultLMStudioDir()
 	if lmStudioDir != customPath {
@@ -45,8 +44,7 @@ func TestGetLMStudioCandidates(t *testing.T) {
 	os.MkdirAll(path2, 0755)
 
 	// Set env var to point to one of them
-	os.Setenv("LMSTUDIO_MODELS", path1)
-	defer os.Unsetenv("LMSTUDIO_MODELS")
+	t.Setenv("LMSTUDIO_MODELS", path1)
 
 	candidates := GetLMStudioCandidates()
 
@@ -62,7 +60,7 @@ func TestGetLMStudioCandidates(t *testing.T) {
 	}
 
 	// Test unsafe path rejection
-	os.Setenv("LMSTUDIO_MODELS", "/")
+	t.Setenv("LMSTUDIO_MODELS", "/")
 	candidates = GetLMStudioCandidates()
 	for _, c := range candidates {
 		if c == "/" || c == `\` {
