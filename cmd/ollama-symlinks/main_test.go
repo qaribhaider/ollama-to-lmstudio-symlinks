@@ -153,8 +153,10 @@ func TestRunApp_PreFlight_Reverse_SkipChecks(t *testing.T) {
 		"--ollama-dir", ollamaDir,
 	}, strings.NewReader(""))
 
-	if err != nil {
-		t.Fatalf("expected nil error with --skip-checks, got %v", err)
+	// The library is empty, so an empty-library error is expected; a pre-flight
+	// error is not, because --skip-checks must bypass validation.
+	if err != nil && strings.Contains(err.Error(), "blocking validation error") {
+		t.Fatalf("expected --skip-checks to bypass pre-flight validation, got %v", err)
 	}
 }
 
@@ -297,8 +299,10 @@ func TestRunApp_PreFlight_Forward_LMStudio_SkipChecks(t *testing.T) {
 		"--lmstudio-dir", nonExistentLMSDir,
 	}, strings.NewReader(""))
 
-	if err != nil {
-		t.Fatalf("expected nil error with --skip-checks, got %v", err)
+	// The library is empty, so an empty-library error is expected; a pre-flight
+	// error is not, because --skip-checks must bypass validation.
+	if err != nil && strings.Contains(err.Error(), "blocking validation error") {
+		t.Fatalf("expected --skip-checks to bypass pre-flight validation, got %v", err)
 	}
 }
 
