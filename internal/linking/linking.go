@@ -460,7 +460,7 @@ func ListSymlinks(dir string) ([]SymlinkInfo, error) {
 		}
 
 		info, infoErr := d.Info()
-		if infoErr != nil || !isManagedLink(info) {
+		if infoErr != nil || !IsManagedLink(info) {
 			return nil
 		}
 
@@ -483,10 +483,10 @@ func ListSymlinks(dir string) ([]SymlinkInfo, error) {
 	return symlinks, err
 }
 
-// isManagedLink reports whether info describes something this tool created: a
+// IsManagedLink reports whether info describes something this tool created: a
 // symlink, or a regular file with more than one hard link. A regular file with a
 // single link is original data and must never be listed or removed.
-func isManagedLink(info os.FileInfo) bool {
+func IsManagedLink(info os.FileInfo) bool {
 	if info.Mode()&os.ModeSymlink != 0 {
 		return true
 	}
@@ -506,7 +506,7 @@ func RemoveSymlinks(paths []string, dryRun bool) (int, int) {
 			failed++
 			continue
 		}
-		if !isManagedLink(info) {
+		if !IsManagedLink(info) {
 			ui.PrintError(fmt.Sprintf("Refusing to remove %s: not a symlink or hard link", path))
 			failed++
 			continue
