@@ -231,8 +231,10 @@ func collectGGUFFiles(lmstudioDir, skipProvider string, verbose bool) (dirList [
 			return nil
 		}
 
-		// Skip the provider directory we use for forward linking
-		if info.IsDir() && info.Name() == skipProvider {
+		// Skip the provider directory we use for forward linking. Only the one
+		// directly under the root: a model folder elsewhere may share its name,
+		// and some filesystems (macOS) are case-insensitive.
+		if info.IsDir() && filepath.Dir(path) == filepath.Clean(lmstudioDir) && strings.EqualFold(info.Name(), skipProvider) {
 			return filepath.SkipDir
 		}
 
