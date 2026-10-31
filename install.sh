@@ -24,7 +24,8 @@ NC='\033[0m' # No Color
 log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+# Errors go to stderr: they are often raised inside $(...), where stdout is captured.
+log_error() { echo -e "${RED}[ERROR]${NC} $1" >&2; }
 
 # Detect OS and Architecture
 detect_system() {
