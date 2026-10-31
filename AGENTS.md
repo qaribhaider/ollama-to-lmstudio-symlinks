@@ -10,7 +10,7 @@ make test                                     # go test -v ./...
 go test ./internal/linking -run TestName -v   # single test
 ```
 
-CI (`.github/workflows/ci.yml`) runs `go test -v ./...` and a build with `-ldflags="-X 'main.Version=$(cat VERSION)'"`. The version lives in the `VERSION` file and is injected at build time, so a plain `go build` reports a default version. Releases are triggered by bumping `VERSION` (`make update-version`).
+CI (`.github/workflows/ci.yml`) runs `go test -v ./...` and a build with `-ldflags="-X 'main.Version=$(cat VERSION)'"`. The version lives in the `VERSION` file and is injected at build time, so a plain `go build` reports a default version. A release is published only when a push to `main` changes `VERSION` (`make update-version`): `build.yml` is path-filtered to that file and fails if the tag already exists.
 
 ## Architecture
 
@@ -21,7 +21,7 @@ A single-binary Go CLI (Bubble Tea / huh for the interactive UI) that shares mod
 
 Layout:
 
-- `cmd/ollama-symlinks/main.go` is the entire command layer: `runApp` parses flags and dispatches to `runForward`, `runReverse`, `runStatus`, `runCleanup`, `runDelete`/`runDeleteOllama`, or the interactive `runMainMenu`. `stdin` is passed in as an `io.Reader` so tests can drive the prompts.
+- `cmd/ollama-symlinks/main.go` is the entire command layer: `runApp` parses flags and dispatches to `runForward`, `runReverse`, `runStatus`, `runCleanup`, `runDelete`/`runDeleteOllama`, or the interactive `runMainMenu`. The `stdin` parameter is threaded through but the `huh` prompts read the real terminal, so interactive paths cannot be driven from tests; keep decisions in pure functions (`findOwnedModels`, `confirmOutcome`) and test those.
 - `internal/ollama` and `internal/lmstudio` discover models and locate/validate the respective executables (`executable.go`, skipped with `--skip-checks`). They return the types in `internal/models`.
 - `internal/linking` does the actual file work: `ProcessModel` (forward), `ProcessLMStudioModel` (reverse), `linkBlob`, plus listing, removing, and broken-link detection. `status.go` computes the savings numbers. `hardlink_unix.go` and `hardlink_windows.go` are build-tagged and differ in how hard-link identity is detected.
 - `internal/gguf` reads GGUF headers. `internal/ui` holds shared lipgloss styles.
@@ -30,6 +30,8 @@ Layout:
 
 - Sharded models (`...-00001-of-0000N.gguf`) and vision projectors (`mmproj-*.gguf`) must be grouped and linked together with their main model. Both have had dedicated bugfixes, so check the existing tests before changing the grouping logic.
 - Names derived from model paths go through `SecureJoin` and `SanitizeModelName` in `internal/linking`. Route any new path built from manifest or user-supplied names through them.
-- The tool must never overwrite an existing file and must only delete links, never the original weights. Reverse mode skips symlinks and the `ollama` provider folder to avoid circular links.
+- The tool must never overwrite an existing file and must only delete links, never the original weights. Anything that lists or removes files must go through `linking.IsManagedLink` (a symlink, or a file with more than one hard link); a plain file is original data. Reverse mode skips symlinks and the provider folder to avoid circular links.
+- `--skip-provider` is one value shared by forward, reverse, status, delete and cleanup, validated by `validateProviderName`. delete and cleanup act on everything inside that folder, so never accept an empty or path-like value.
+- `--hardlinks` never falls back to symlinks: a failed hard link is an error.
 - `--hardlinks` exists because Windows symlinks need Developer Mode or admin rights and can show up as 0-byte files. See `TROUBLESHOOTING.md`.
 - `--dry-run` has to be honoured by every function that touches the filesystem; it is passed down explicitly rather than being global state.
