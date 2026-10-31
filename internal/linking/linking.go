@@ -47,7 +47,8 @@ func SecureJoin(base, name string) (string, error) {
 		return "", err
 	}
 	// Check for traversal or unexpected root reference
-	if strings.HasPrefix(rel, "..") || strings.HasPrefix(rel, string(filepath.Separator)) {
+	// Compare whole path elements: "..foo" is a legitimate file name, ".." is not.
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || strings.HasPrefix(rel, string(filepath.Separator)) {
 		return "", fmt.Errorf("path traversal or escape attempt detected: %s", name)
 	}
 	return result, nil
