@@ -439,6 +439,19 @@ func linkBlob(sourcePath, ollamaDir string, dryRun, verbose, useHardlinks bool) 
 			return "", false
 		}
 
+		// A blob link whose source moved or was deleted would make Ollama fail to
+		// load the model, and the blob name is the content hash, so replacing it
+		// with a link to the file we just hashed is safe.
+		if info, err := os.Lstat(blobPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			if _, statErr := os.Stat(blobPath); os.IsNotExist(statErr) {
+				if err := os.Remove(blobPath); err != nil {
+					ui.PrintError(fmt.Sprintf("Could not replace broken blob link %s: %v", blobFilename, err))
+					return "", false
+				}
+				ui.PrintWarning(fmt.Sprintf("Replacing broken blob link: %s", blobFilename))
+			}
+		}
+
 		if info, err := os.Lstat(blobPath); err != nil {
 			if os.IsNotExist(err) {
 				if err := createLink(sourcePath, blobPath, useHardlinks); err != nil {
