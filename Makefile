@@ -1,12 +1,17 @@
-.PHONY: build clean test version
+.PHONY: all build clean test version install update-version
+
+# update-version uses bash's `read -p`
+SHELL := /bin/bash
+
+VERSION := $(shell cat VERSION)
 
 # Default target
 all: build
 
-# Build the binary
+# Build the binary, injecting the version the same way CI does
 build:
-	@echo "Building ollama-symlinks..."
-	@go build -o ollama-symlinks ./cmd/ollama-symlinks
+	@echo "Building ollama-symlinks $(VERSION)..."
+	@go build -ldflags="-X 'main.Version=$(VERSION)'" -o ollama-symlinks ./cmd/ollama-symlinks
 
 # Clean built files
 clean:
