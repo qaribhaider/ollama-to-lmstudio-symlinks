@@ -6,6 +6,35 @@ import (
 	"testing"
 )
 
+func TestInspectDirectory_SymlinkChainsCountSavingsOnce(t *testing.T) {
+	real := filepath.Join(t.TempDir(), "model.gguf")
+	if err := os.WriteFile(real, make([]byte, 2048), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	direct := filepath.Join(dir, "direct.gguf")
+	viaChain := filepath.Join(dir, "via-chain.gguf")
+	if err := os.Symlink(real, direct); err != nil {
+		t.Skipf("symlinks not supported here: %v", err)
+	}
+	// This link reaches the same file through the first link.
+	if err := os.Symlink(direct, viaChain); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := InspectDirectory(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.ActiveLinks != 2 {
+		t.Errorf("expected 2 active links, got %d", status.ActiveLinks)
+	}
+	if status.BytesSaved != 2048 {
+		t.Errorf("both links reach one 2048-byte file, so savings must be counted once, got %d", status.BytesSaved)
+	}
+}
+
 func TestFormatBytes(t *testing.T) {
 	tests := []struct {
 		input    int64
