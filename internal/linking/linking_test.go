@@ -282,6 +282,37 @@ func TestSecureJoin_AllowsNamesThatOnlyStartWithDots(t *testing.T) {
 	}
 }
 
+func TestIsManagedLink(t *testing.T) {
+	dir := t.TempDir()
+	plain := filepath.Join(dir, "plain.gguf")
+	os.WriteFile(plain, []byte("weights"), 0644)
+
+	hardLink := filepath.Join(dir, "hard.gguf")
+	if err := os.Link(plain, hardLink); err != nil {
+		t.Skipf("hard links not supported here: %v", err)
+	}
+	symlink := filepath.Join(dir, "sym.gguf")
+	if err := os.Symlink(plain, symlink); err != nil {
+		t.Skipf("symlinks not supported here: %v", err)
+	}
+	original := filepath.Join(dir, "original.gguf")
+	os.WriteFile(original, []byte("only copy"), 0644)
+
+	for path, want := range map[string]bool{
+		hardLink: true, // Windows resolves link counts from the path, so it must be passed
+		symlink:  true,
+		original: false, // a single-link file is original data
+	} {
+		info, err := os.Lstat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := IsManagedLink(path, info); got != want {
+			t.Errorf("IsManagedLink(%s) = %v, want %v", filepath.Base(path), got, want)
+		}
+	}
+}
+
 func TestIsSystemOllama(t *testing.T) {
 	for dir, want := range map[string]bool{
 		"/var/lib/ollama/.ollama/models":   true,
