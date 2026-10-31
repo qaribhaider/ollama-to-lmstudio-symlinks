@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -376,6 +377,34 @@ func TestDiscoverLMStudioModels_IncompleteShards(t *testing.T) {
 	// Should be skipped because shard 1 is missing
 	if len(models) != 0 {
 		t.Fatalf("expected 0 models for missing shard 1, got %d", len(models))
+	}
+}
+
+func TestDiscoverLMStudioModels_UnreadableDirectoryDoesNotHideOtherModels(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("directory permissions are not enforced here")
+	}
+	tempDir := t.TempDir()
+	good := filepath.Join(tempDir, "author", "good")
+	locked := filepath.Join(tempDir, "author", "locked")
+	for _, d := range []string{good, locked} {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeSyntheticGGUF(t, filepath.Join(good, "good.gguf"), "llama")
+	writeSyntheticGGUF(t, filepath.Join(locked, "locked.gguf"), "llama")
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0755) })
+
+	found, err := DiscoverLMStudioModels(tempDir, "ollama", false)
+	if err != nil {
+		t.Fatalf("one unreadable directory must not fail discovery: %v", err)
+	}
+	if len(found) != 1 {
+		t.Fatalf("expected the readable model to be found, got %+v", found)
 	}
 }
 

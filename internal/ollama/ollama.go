@@ -163,7 +163,9 @@ func DiscoverModels(ollamaDir string, verbose bool) ([]models.ModelInfo, error) 
 
 		for _, layer := range manifest.Layers {
 			if err := ValidateDigest(layer.Digest); err != nil {
-				return fmt.Errorf("invalid layer in %s: %w", path, err)
+				// One corrupt manifest must not hide the rest of the library.
+				fmt.Printf("⚠️  Skipping %s: invalid layer: %v\n", fullModelName, err)
+				return nil
 			}
 
 			switch {

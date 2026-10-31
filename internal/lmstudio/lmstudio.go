@@ -206,7 +206,12 @@ func DiscoverLMStudioModels(lmstudioDir, skipProvider string, verbose bool) ([]m
 
 	err := filepath.Walk(lmstudioDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return err
+			if path == lmstudioDir {
+				return err
+			}
+			// An unreadable subdirectory must not hide the rest of the library.
+			fmt.Printf("⚠️  Skipping %s: %v\n", path, err)
+			return nil
 		}
 
 		// Skip the provider directory we use for forward linking
