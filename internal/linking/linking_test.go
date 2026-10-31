@@ -234,6 +234,33 @@ func TestProcessModel_Sharded_RollsBackWhenLaterShardFails(t *testing.T) {
 	}
 }
 
+func TestLinkBlob_RepairsDanglingBlobLink(t *testing.T) {
+	ollamaDir := t.TempDir()
+	blobsDir := filepath.Join(ollamaDir, "blobs")
+	os.MkdirAll(blobsDir, 0755)
+
+	source := filepath.Join(t.TempDir(), "model.gguf")
+	os.WriteFile(source, []byte("weights"), 0644)
+	hash, err := CalculateSHA256(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// An earlier run linked this blob, then the source file moved away.
+	blob := filepath.Join(blobsDir, "sha256-"+hash)
+	if err := os.Symlink(filepath.Join(t.TempDir(), "moved-away.gguf"), blob); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := linkBlob(source, ollamaDir, false, false, false); !ok {
+		t.Fatal("linkBlob failed")
+	}
+	got, err := os.ReadFile(blob)
+	if err != nil || string(got) != "weights" {
+		t.Errorf("blob link must resolve to the current source, read %q, err %v", got, err)
+	}
+}
+
 func TestCreateLink_HardlinkFailureDoesNotFallBackToSymlink(t *testing.T) {
 	dir := t.TempDir()
 	missingSource := filepath.Join(dir, "missing.gguf") // os.Link fails, os.Symlink would not
