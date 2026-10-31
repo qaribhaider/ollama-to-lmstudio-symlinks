@@ -408,6 +408,34 @@ func TestDiscoverLMStudioModels_UnreadableDirectoryDoesNotHideOtherModels(t *tes
 	}
 }
 
+func TestDiscoverLMStudioModels_SkipsOnlyTheTopLevelProviderFolder(t *testing.T) {
+	root := t.TempDir()
+	for _, p := range []string{
+		"ollama/forward-link.gguf",      // our own provider folder: must be skipped
+		"Ollama/case-variant.gguf",      // same folder on a case-insensitive filesystem
+		"author/ollama/real-model.gguf", // a model folder that happens to be named ollama
+	} {
+		dir := filepath.Join(root, filepath.Dir(p))
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		writeSyntheticGGUF(t, filepath.Join(root, p), "llama")
+	}
+
+	found, err := DiscoverLMStudioModels(root, "ollama", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var paths []string
+	for _, m := range found {
+		paths = append(paths, filepath.ToSlash(strings.TrimPrefix(m.Path, root)))
+	}
+	if len(found) != 1 || paths[0] != "/author/ollama/real-model.gguf" {
+		t.Fatalf("expected only the nested model, got %v", paths)
+	}
+}
+
 func TestDiscoverLMStudioModels_ShardSetsMustBeComplete(t *testing.T) {
 	cases := map[string][]string{
 		"gap in the middle": {"model-00001-of-00003.gguf", "model-00003-of-00003.gguf"},
