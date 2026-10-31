@@ -379,6 +379,36 @@ func TestDiscoverLMStudioModels_IncompleteShards(t *testing.T) {
 	}
 }
 
+func TestDiscoverLMStudioModels_ShardSetsMustBeComplete(t *testing.T) {
+	cases := map[string][]string{
+		"gap in the middle": {"model-00001-of-00003.gguf", "model-00003-of-00003.gguf"},
+		"missing tail":      {"model-00001-of-00003.gguf", "model-00002-of-00003.gguf"},
+		"only first shard":  {"model-00001-of-00002.gguf"},
+		"mixed totals":      {"model-00001-of-00002.gguf", "model-00002-of-00002.gguf", "model-00003-of-00003.gguf"},
+	}
+
+	for name, files := range cases {
+		t.Run(name, func(t *testing.T) {
+			tempDir := t.TempDir()
+			modelDir := filepath.Join(tempDir, "author", "partial")
+			if err := os.MkdirAll(modelDir, 0755); err != nil {
+				t.Fatal(err)
+			}
+			for _, f := range files {
+				writeSyntheticGGUF(t, filepath.Join(modelDir, f), "llama")
+			}
+
+			found, err := DiscoverLMStudioModels(tempDir, "ollama", false)
+			if err != nil {
+				t.Fatalf("DiscoverLMStudioModels failed: %v", err)
+			}
+			if len(found) != 0 {
+				t.Fatalf("incomplete shard set must not be offered as a model, got %+v", found)
+			}
+		})
+	}
+}
+
 func TestDiscoverLMStudioModels_Combinatorial(t *testing.T) {
 	tempDir := t.TempDir()
 

@@ -148,6 +148,28 @@ func matchProjector(basePath string, projectors []string) string {
 
 var shardRegex = regexp.MustCompile(`(?i)^(.*?)[-_](\d+)-of-(\d+)\.gguf$`)
 
+type shardInfo struct {
+	path  string
+	part  int
+	total int
+}
+
+// isCompleteShardSet reports whether shards (sorted by part) are exactly parts
+// 1..N of a single N-part model. Linking a partial set would register a model
+// Ollama cannot load.
+func isCompleteShardSet(shards []shardInfo) bool {
+	total := shards[0].total
+	if len(shards) != total {
+		return false
+	}
+	for i, s := range shards {
+		if s.total != total || s.part != i+1 {
+			return false
+		}
+	}
+	return true
+}
+
 func generateModelName(lmstudioDir, path string) string {
 	rel, _ := filepath.Rel(lmstudioDir, path)
 	parts := strings.Split(rel, string(os.PathSeparator))
@@ -253,12 +275,6 @@ func DiscoverLMStudioModels(lmstudioDir, skipProvider string, verbose bool) ([]m
 			continue
 		}
 
-		type shardInfo struct {
-			path  string
-			part  int
-			total int
-		}
-
 		shardsByPrefix := make(map[string][]shardInfo)
 		var standaloneModels []string
 
@@ -309,9 +325,9 @@ func DiscoverLMStudioModels(lmstudioDir, skipProvider string, verbose bool) ([]m
 				return shards[i].part < shards[j].part
 			})
 
-			if shards[0].part != 1 {
+			if !isCompleteShardSet(shards) {
 				if verbose {
-					fmt.Printf("⚠️  Skipping incomplete sharded model group %q: missing shard 1 (found %d shards)\n", prefix, len(shards))
+					fmt.Printf("⚠️  Skipping incomplete sharded model group %q: found %d shards that do not form a complete set\n", prefix, len(shards))
 				}
 				continue
 			}
