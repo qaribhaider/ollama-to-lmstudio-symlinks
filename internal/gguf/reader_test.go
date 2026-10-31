@@ -58,6 +58,48 @@ func createSyntheticGGUF(version uint32, kvs map[string]interface{}) []byte {
 	return buf.Bytes()
 }
 
+// nestedArrayGGUF builds a GGUF whose first metadata value is `depth` arrays
+// nested inside each other, followed by general.architecture.
+func nestedArrayGGUF(depth int) []byte {
+	buf := new(bytes.Buffer)
+	buf.Write([]byte{'G', 'G', 'U', 'F'})
+	binary.Write(buf, binary.LittleEndian, uint32(3))
+	binary.Write(buf, binary.LittleEndian, uint64(0))
+	binary.Write(buf, binary.LittleEndian, uint64(2))
+
+	key := "tokenizer.nested"
+	binary.Write(buf, binary.LittleEndian, uint64(len(key)))
+	buf.WriteString(key)
+	binary.Write(buf, binary.LittleEndian, TypeArray)
+	for level := 0; level < depth; level++ {
+		if level == depth-1 {
+			binary.Write(buf, binary.LittleEndian, TypeUint8)
+			binary.Write(buf, binary.LittleEndian, uint64(0))
+		} else {
+			binary.Write(buf, binary.LittleEndian, TypeArray)
+			binary.Write(buf, binary.LittleEndian, uint64(1))
+		}
+	}
+
+	arch := "general.architecture"
+	binary.Write(buf, binary.LittleEndian, uint64(len(arch)))
+	buf.WriteString(arch)
+	binary.Write(buf, binary.LittleEndian, TypeString)
+	binary.Write(buf, binary.LittleEndian, uint64(len("llama")))
+	buf.WriteString("llama")
+	return buf.Bytes()
+}
+
+func TestInspectGGUFReader_RejectsDeeplyNestedArrays(t *testing.T) {
+	if info, err := InspectGGUFReader(bytes.NewReader(nestedArrayGGUF(3))); err != nil || info.Architecture != "llama" {
+		t.Fatalf("shallow nesting must still parse, got %+v, %v", info, err)
+	}
+
+	if _, err := InspectGGUFReader(bytes.NewReader(nestedArrayGGUF(10))); err == nil {
+		t.Fatal("deeply nested arrays must be rejected instead of recursing without bound")
+	}
+}
+
 func TestInspectGGUFReader_BaseModel(t *testing.T) {
 	data := createSyntheticGGUF(3, map[string]interface{}{
 		"general.architecture": "llama",
