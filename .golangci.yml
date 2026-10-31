@@ -1,5 +1,14 @@
 version: "2"
 
+linters:
+  exclusions:
+    rules:
+      # Test setup (MkdirAll, WriteFile, Symlink) failing would fail the test
+      # that follows, so checking each call only adds noise.
+      - path: _test\.go
+        linters:
+          - errcheck
+
 formatters:
   enable:
     - gofmt

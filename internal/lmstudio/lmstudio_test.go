@@ -176,14 +176,14 @@ func TestDeduceModelRole(t *testing.T) {
 	// 5. Plain text / mock files (fallback to filename)
 	mockProj := filepath.Join(tempDir, "mmproj-gemma-f16.gguf")
 	os.WriteFile(mockProj, []byte("plain text not gguf"), 0644)
-	isProj, arch = DeduceModelRole(mockProj)
+	isProj, _ = DeduceModelRole(mockProj)
 	if !isProj {
 		t.Errorf("expected fallback text match to detect projector, got false")
 	}
 
 	mockBase := filepath.Join(tempDir, "gemma-q4_0.gguf")
 	os.WriteFile(mockBase, []byte("plain text not gguf"), 0644)
-	isProj, arch = DeduceModelRole(mockBase)
+	isProj, _ = DeduceModelRole(mockBase)
 	if isProj {
 		t.Errorf("expected fallback text match to detect base model, got true")
 	}
