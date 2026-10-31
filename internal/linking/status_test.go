@@ -45,8 +45,8 @@ func TestInspectDirectory(t *testing.T) {
 
 	target1 := filepath.Join(targetDir, "model1.gguf")
 	target2 := filepath.Join(targetDir, "model2.gguf")
-	os.WriteFile(target1, make([]byte, 1024*1024), 0644)       // 1MB
-	os.WriteFile(target2, make([]byte, 2*1024*1024), 0644)     // 2MB
+	os.WriteFile(target1, make([]byte, 1024*1024), 0644)   // 1MB
+	os.WriteFile(target2, make([]byte, 2*1024*1024), 0644) // 2MB
 
 	// Directory to inspect
 	inspectDir := filepath.Join(tempDir, "managed")

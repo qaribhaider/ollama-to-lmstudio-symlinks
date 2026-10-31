@@ -65,7 +65,7 @@ func GetLMStudioCandidates() []string {
 
 	// Filter to only include directories that actually exist
 	var existing []string
-	
+
 	unique := make(map[string]bool)
 	for _, c := range candidates {
 		c = filepath.Clean(c)

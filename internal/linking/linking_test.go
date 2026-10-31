@@ -591,9 +591,6 @@ func TestProcessLMStudioModel_Sharded_NewlineInjection(t *testing.T) {
 	}
 }
 
-
-
-
 func TestProcessLMStudioModel_Combinatorial(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("skipping shell script mock on Windows")
