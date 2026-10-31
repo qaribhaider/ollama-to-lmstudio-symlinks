@@ -19,6 +19,13 @@ jobs:
           go-version: "1.26"
           cache-dependency-path: go.sum
 
+      # Existing code has unresolved findings, so only report issues in the PR's changes.
+      - name: Lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.15
+          only-new-issues: true
+
       - name: Run Tests
         run: go test -v ./...
 
