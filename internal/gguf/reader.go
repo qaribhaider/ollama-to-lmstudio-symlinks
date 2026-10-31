@@ -143,7 +143,7 @@ func InspectGGUFReader(r io.Reader) (*GGUFInfo, error) {
 		}
 
 		// Skip value based on type
-		if err := skipValue(r, valType); err != nil {
+		if err := skipValue(r, valType, 0); err != nil {
 			if info.Architecture != "" {
 				break
 			}
@@ -170,7 +170,14 @@ func readString(r io.Reader) (string, error) {
 	return string(buf), nil
 }
 
-func skipValue(r io.Reader, valType uint32) error {
+// maxArrayNesting bounds how deeply metadata arrays may nest. Real files use at
+// most arrays of strings or numbers; a crafted file could otherwise recurse
+// once per 12 bytes until memory runs out.
+const maxArrayNesting = 4
+
+// skipValue discards one metadata value. depth is the number of arrays already
+// entered.
+func skipValue(r io.Reader, valType uint32, depth int) error {
 	switch valType {
 	case TypeUint8, TypeInt8, TypeBool:
 		var dummy [1]byte
@@ -198,6 +205,9 @@ func skipValue(r io.Reader, valType uint32) error {
 		}
 		return discardBytes(r, length)
 	case TypeArray:
+		if depth >= maxArrayNesting {
+			return fmt.Errorf("metadata arrays nested more than %d levels deep", maxArrayNesting)
+		}
 		var elemType uint32
 		if err := binary.Read(r, binary.LittleEndian, &elemType); err != nil {
 			return err
@@ -210,7 +220,7 @@ func skipValue(r io.Reader, valType uint32) error {
 			return fmt.Errorf("array element count too large: %d", elemCount)
 		}
 		for i := uint64(0); i < elemCount; i++ {
-			if err := skipValue(r, elemType); err != nil {
+			if err := skipValue(r, elemType, depth+1); err != nil {
 				return err
 			}
 		}
