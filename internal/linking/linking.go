@@ -191,9 +191,7 @@ func createModelLinks(model models.ModelInfo, ollamaDir, modelDir, safeDirName s
 
 	created, ok := linkMainShards(model, ollamaDir, modelDir, safeDirName, verbose, useHardlinks)
 	if !ok {
-		for _, p := range created {
-			_ = os.Remove(p)
-		}
+		removeLinks(created)
 		return false
 	}
 
@@ -302,7 +300,8 @@ func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix, oll
 		printLMStudioModelDetails(model)
 	}
 
-	if !linkModelBlobs(model, ollamaDir, dryRun, verbose, useHardlinks) {
+	createdBlobs, ok := linkModelBlobs(model, ollamaDir, dryRun, verbose, useHardlinks)
+	if !ok {
 		return false
 	}
 
@@ -311,7 +310,11 @@ func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix, oll
 		previewRegistration(model, ollamaModelName)
 		return true
 	}
-	return registerWithOllama(model, ollamaModelName, ollamaBin, verbose)
+	if !registerWithOllama(model, ollamaModelName, ollamaBin, verbose) {
+		removeLinks(createdBlobs)
+		return false
+	}
+	return true
 }
 
 func printLMStudioModelDetails(model models.LMStudioModel) {
@@ -325,30 +328,47 @@ func printLMStudioModelDetails(model models.LMStudioModel) {
 }
 
 // linkModelBlobs links the primary file, companion shards and projector into
-// Ollama's blobs directory.
-func linkModelBlobs(model models.LMStudioModel, ollamaDir string, dryRun, verbose, useHardlinks bool) bool {
-	if _, ok := linkBlob(model.Path, ollamaDir, dryRun, verbose, useHardlinks); !ok {
-		return false
+// Ollama's blobs directory. It returns the blob links this call created, which
+// may be fewer than the model needs: blobs shared with other models already
+// exist and must be left alone. On failure it removes what it created.
+func linkModelBlobs(model models.LMStudioModel, ollamaDir string, dryRun, verbose, useHardlinks bool) (created []string, ok bool) {
+	link := func(path string) bool {
+		blobPath, wasCreated, linked := linkBlob(path, ollamaDir, dryRun, verbose, useHardlinks)
+		if wasCreated {
+			created = append(created, blobPath)
+		}
+		return linked
 	}
 
+	steps := []struct {
+		path  string
+		label string
+	}{{model.Path, ""}}
 	for i, shardPath := range model.ShardPaths {
-		if verbose {
-			ui.PrintInfo(fmt.Sprintf("Linking shard blob %d: %s", i+2, filepath.Base(shardPath)))
-		}
-		if _, ok := linkBlob(shardPath, ollamaDir, dryRun, verbose, useHardlinks); !ok {
-			return false
-		}
+		steps = append(steps, struct{ path, label string }{shardPath, fmt.Sprintf("Linking shard blob %d: %s", i+2, filepath.Base(shardPath))})
+	}
+	if model.ProjectorPath != "" {
+		steps = append(steps, struct{ path, label string }{model.ProjectorPath, "Linking vision projector: " + filepath.Base(model.ProjectorPath)})
 	}
 
-	if model.ProjectorPath != "" {
-		if verbose {
-			ui.PrintInfo(fmt.Sprintf("Linking vision projector: %s", filepath.Base(model.ProjectorPath)))
+	for _, step := range steps {
+		if verbose && step.label != "" {
+			ui.PrintInfo(step.label)
 		}
-		if _, ok := linkBlob(model.ProjectorPath, ollamaDir, dryRun, verbose, useHardlinks); !ok {
-			return false
+		if !link(step.path) {
+			removeLinks(created)
+			return nil, false
 		}
 	}
-	return true
+	return created, true
+}
+
+// removeLinks deletes links created by a call that then failed, so a retry
+// starts clean. Removal errors are ignored: the links are ours and only dangle.
+func removeLinks(paths []string) {
+	for _, p := range paths {
+		_ = os.Remove(p)
+	}
 }
 
 func previewRegistration(model models.LMStudioModel, ollamaModelName string) {
@@ -449,31 +469,31 @@ func systemOllamaGroupHint(ollamaDir string) string {
 }
 
 // linkBlob links sourcePath into Ollama's blobs directory under its content hash.
-func linkBlob(sourcePath, ollamaDir string, dryRun, verbose, useHardlinks bool) (string, bool) {
+func linkBlob(sourcePath, ollamaDir string, dryRun, verbose, useHardlinks bool) (blobPath string, created, ok bool) {
 	if verbose {
 		ui.PrintMuted(fmt.Sprintf("Calculating SHA256 for %s...", filepath.Base(sourcePath)))
 	}
 	hash, err := CalculateSHA256(sourcePath)
 	if err != nil {
 		ui.PrintError(fmt.Sprintf("Could not calculate hash for %s: %v", filepath.Base(sourcePath), err))
-		return "", false
+		return "", false, false
 	}
 	if verbose {
 		ui.PrintMuted(fmt.Sprintf("done: %s", hash))
 	}
 
 	blobFilename := "sha256-" + hash
-	blobPath, err := SecureJoin(filepath.Join(ollamaDir, "blobs"), blobFilename)
+	blobPath, err = SecureJoin(filepath.Join(ollamaDir, "blobs"), blobFilename)
 	if err != nil {
 		ui.PrintError(fmt.Sprintf("%v", err))
-		return "", false
+		return "", false, false
 	}
 
 	warnIfUnreadableBySystemOllama(sourcePath, ollamaDir)
 
 	if dryRun {
 		ui.PrintMuted(fmt.Sprintf("Would create blob symlink: %s -> %s", blobPath, sourcePath))
-		return blobPath, true
+		return blobPath, false, true
 	}
 
 	if err := os.MkdirAll(filepath.Join(ollamaDir, "blobs"), 0755); err != nil {
@@ -484,16 +504,17 @@ func linkBlob(sourcePath, ollamaDir string, dryRun, verbose, useHardlinks bool) 
 		} else {
 			ui.PrintError(fmt.Sprintf("Could not create blobs directory: %v", err))
 		}
-		return "", false
+		return "", false, false
 	}
 
 	if !removeDanglingBlobLink(blobPath, blobFilename) {
-		return "", false
+		return "", false, false
 	}
-	if !ensureBlobLink(sourcePath, blobPath, blobFilename, ollamaDir, verbose, useHardlinks) {
-		return "", false
+	created, ok = ensureBlobLink(sourcePath, blobPath, blobFilename, ollamaDir, verbose, useHardlinks)
+	if !ok {
+		return "", false, false
 	}
-	return blobPath, true
+	return blobPath, created, true
 }
 
 // warnIfUnreadableBySystemOllama notes sources the 'ollama' service user could not read.
@@ -527,7 +548,8 @@ func removeDanglingBlobLink(blobPath, blobFilename string) bool {
 }
 
 // ensureBlobLink creates the blob link unless something is already there.
-func ensureBlobLink(sourcePath, blobPath, blobFilename, ollamaDir string, verbose, useHardlinks bool) bool {
+// created is true only when this call made the link.
+func ensureBlobLink(sourcePath, blobPath, blobFilename, ollamaDir string, verbose, useHardlinks bool) (created, ok bool) {
 	info, err := os.Lstat(blobPath)
 	if err == nil {
 		if info.Mode()&os.ModeSymlink == 0 {
@@ -535,11 +557,11 @@ func ensureBlobLink(sourcePath, blobPath, blobFilename, ollamaDir string, verbos
 		} else if verbose {
 			ui.PrintInfo(fmt.Sprintf("Blob already exists: %s", blobFilename))
 		}
-		return true
+		return false, true
 	}
 	if !os.IsNotExist(err) {
 		ui.PrintError(fmt.Sprintf("Could not access blob path: %v", err))
-		return false
+		return false, false
 	}
 
 	if err := createLink(sourcePath, blobPath, useHardlinks); err != nil {
@@ -551,12 +573,12 @@ func ensureBlobLink(sourcePath, blobPath, blobFilename, ollamaDir string, verbos
 		} else {
 			ui.PrintError(fmt.Sprintf("Could not create link in blobs: %v", err))
 		}
-		return false
+		return false, false
 	}
 	if verbose {
 		ui.PrintSuccess(fmt.Sprintf("Created blob %s: %s", linkKind(useHardlinks), blobPath))
 	}
-	return true
+	return true, true
 }
 
 func ListSymlinks(dir string) ([]SymlinkInfo, error) {

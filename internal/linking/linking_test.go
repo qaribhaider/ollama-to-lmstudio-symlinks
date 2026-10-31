@@ -252,7 +252,7 @@ func TestLinkBlob_RepairsDanglingBlobLink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, ok := linkBlob(source, ollamaDir, false, false, false); !ok {
+	if _, _, ok := linkBlob(source, ollamaDir, false, false, false); !ok {
 		t.Fatal("linkBlob failed")
 	}
 	got, err := os.ReadFile(blob)
@@ -575,6 +575,42 @@ func TestProcessLMStudioModel_ExecutionFailure(t *testing.T) {
 	result := ProcessLMStudioModel(model, ollamaDir, "lms", "/non/existent/binary/path/ollama", false, false, false)
 	if result {
 		t.Errorf("expected ProcessLMStudioModel to return false on execution failure, got true")
+	}
+}
+
+func TestProcessLMStudioModel_FailedRegistrationRemovesOnlyNewBlobLinks(t *testing.T) {
+	ollamaDir := t.TempDir()
+	blobsDir := filepath.Join(ollamaDir, "blobs")
+	os.MkdirAll(blobsDir, 0755)
+
+	sources := t.TempDir()
+	mainFile := filepath.Join(sources, "main.gguf")
+	projector := filepath.Join(sources, "mmproj-main.gguf")
+	os.WriteFile(mainFile, []byte("main weights"), 0644)
+	os.WriteFile(projector, []byte("projector weights"), 0644)
+
+	blobFor := func(path string) string {
+		hash, err := CalculateSHA256(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return filepath.Join(blobsDir, "sha256-"+hash)
+	}
+	// The projector blob already exists, e.g. linked earlier for another model.
+	if err := os.Symlink(projector, blobFor(projector)); err != nil {
+		t.Skipf("symlinks not supported here: %v", err)
+	}
+
+	model := models.LMStudioModel{Name: "m", Path: mainFile, ProjectorPath: projector}
+	if ProcessLMStudioModel(model, ollamaDir, "lms", "/non/existent/ollama", false, false, false) {
+		t.Fatal("expected registration to fail")
+	}
+
+	if _, err := os.Lstat(blobFor(mainFile)); err == nil {
+		t.Error("blob link created by the failed call must be removed")
+	}
+	if _, err := os.Lstat(blobFor(projector)); err != nil {
+		t.Errorf("a blob link that existed before the call must be kept: %v", err)
 	}
 }
 
