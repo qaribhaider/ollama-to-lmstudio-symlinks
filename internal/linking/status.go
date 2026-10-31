@@ -41,76 +41,94 @@ func InspectDirectory(dir string) (DirStatus, error) {
 	}
 	status.Exists = true
 
-	countedTargets := make(map[string]bool)
+	counted := make(map[string]bool)
 
 	err = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		if d.Type()&os.ModeSymlink != 0 {
-			status.TotalLinks++
-			target, readErr := os.Readlink(path)
-			detail := SymlinkDetail{
-				Name: d.Name(),
-				Path: path,
-			}
-			if readErr != nil {
-				detail.IsBroken = true
-				status.BrokenLinks++
-				status.Files = append(status.Files, detail)
-				return nil
-			}
-
-			detail.Target = target
-			targetPath := target
-			if !filepath.IsAbs(targetPath) {
-				targetPath = filepath.Join(filepath.Dir(path), target)
-			}
-
-			targetInfo, statErr := os.Stat(targetPath)
-			if statErr != nil {
-				detail.IsBroken = true
-				status.BrokenLinks++
-			} else {
-				status.ActiveLinks++
-				detail.TargetSize = targetInfo.Size()
-				// Resolve the whole chain so two links reaching one file count once.
-				canonicalTarget := filepath.Clean(targetPath)
-				if resolved, err := filepath.EvalSymlinks(path); err == nil {
-					canonicalTarget = resolved
-				}
-				if !countedTargets[canonicalTarget] {
-					countedTargets[canonicalTarget] = true
-					status.BytesSaved += targetInfo.Size()
-				}
-			}
-			status.Files = append(status.Files, detail)
-		} else if d.Type().IsRegular() {
-			info, statErr := os.Stat(path)
-			if statErr == nil {
-				if isHardlink, id := getHardlinkInfo(path, info); isHardlink {
-					status.TotalLinks++
-					status.ActiveLinks++
-					detail := SymlinkDetail{
-						Name:       d.Name(),
-						Path:       path,
-						Target:     "(hardlink)",
-						IsBroken:   false,
-						TargetSize: info.Size(),
-					}
-					if !countedTargets[id] {
-						countedTargets[id] = true
-						status.BytesSaved += info.Size()
-					}
-					status.Files = append(status.Files, detail)
-				}
-			}
+		switch {
+		case d.Type()&os.ModeSymlink != 0:
+			status.addSymlink(path, d.Name(), counted)
+		case d.Type().IsRegular():
+			status.addHardlink(path, d.Name(), counted)
 		}
 		return nil
 	})
 
 	return status, err
+}
+
+// addSymlink records one symlink. counted holds the files whose size has
+// already been credited, so many links to one file save its size once.
+func (s *DirStatus) addSymlink(path, name string, counted map[string]bool) {
+	s.TotalLinks++
+	detail := SymlinkDetail{Name: name, Path: path}
+
+	target, err := os.Readlink(path)
+	if err != nil {
+		detail.IsBroken = true
+		s.BrokenLinks++
+		s.Files = append(s.Files, detail)
+		return
+	}
+	detail.Target = target
+
+	targetPath := target
+	if !filepath.IsAbs(targetPath) {
+		targetPath = filepath.Join(filepath.Dir(path), target)
+	}
+
+	targetInfo, err := os.Stat(targetPath)
+	if err != nil {
+		detail.IsBroken = true
+		s.BrokenLinks++
+		s.Files = append(s.Files, detail)
+		return
+	}
+
+	s.ActiveLinks++
+	detail.TargetSize = targetInfo.Size()
+
+	// Resolve the whole chain so two links reaching one file count once.
+	canonicalTarget := filepath.Clean(targetPath)
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		canonicalTarget = resolved
+	}
+	s.creditSavings(canonicalTarget, targetInfo.Size(), counted)
+	s.Files = append(s.Files, detail)
+}
+
+// addHardlink records a regular file that shares its data with another path.
+// Files with a single link are original data and are ignored.
+func (s *DirStatus) addHardlink(path, name string, counted map[string]bool) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+	isHardlink, id := getHardlinkInfo(path, info)
+	if !isHardlink {
+		return
+	}
+
+	s.TotalLinks++
+	s.ActiveLinks++
+	s.creditSavings(id, info.Size(), counted)
+	s.Files = append(s.Files, SymlinkDetail{
+		Name:       name,
+		Path:       path,
+		Target:     "(hardlink)",
+		TargetSize: info.Size(),
+	})
+}
+
+func (s *DirStatus) creditSavings(key string, size int64, counted map[string]bool) {
+	if counted[key] {
+		return
+	}
+	counted[key] = true
+	s.BytesSaved += size
 }
 
 // FormatBytes formats byte counts into human-readable string (e.g., 1.45 GB).
