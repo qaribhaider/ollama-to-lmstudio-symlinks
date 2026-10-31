@@ -43,6 +43,16 @@ func isSafePath(p string) bool {
 	return true
 }
 
+// systemModelDirs lists where system-wide Ollama installs keep their models:
+// the official install script's service user (/usr/share/ollama) and distro
+// packages such as Arch Linux (/var/lib/ollama).
+func systemModelDirs() []string {
+	return []string{
+		"/usr/share/ollama/.ollama/models",
+		"/var/lib/ollama/.ollama/models",
+	}
+}
+
 func GetOllamaCandidates() []string {
 	var candidates []string
 
@@ -57,9 +67,9 @@ func GetOllamaCandidates() []string {
 		candidates = append(candidates, filepath.Join(home, ".ollama", "models"))
 	}
 
-	// 3. Linux system-wide install (e.g. Arch Linux)
+	// 3. Linux system-wide installs
 	if os.PathSeparator == '/' && os.Getenv("OS") != "Windows_NT" {
-		candidates = append(candidates, "/var/lib/ollama/.ollama/models")
+		candidates = append(candidates, systemModelDirs()...)
 	}
 
 	// 3. Windows-specific locations

@@ -153,6 +153,20 @@ func TestDiscoverModels(t *testing.T) {
 	}
 }
 
+func TestSystemModelDirs_CoverServiceAndPackageInstalls(t *testing.T) {
+	got := map[string]bool{}
+	for _, d := range systemModelDirs() {
+		got[d] = true
+	}
+	// Ollama's official Linux install script runs a service user whose home is
+	// /usr/share/ollama; distro packages use /var/lib/ollama.
+	for _, want := range []string{"/usr/share/ollama/.ollama/models", "/var/lib/ollama/.ollama/models"} {
+		if !got[want] {
+			t.Errorf("systemModelDirs() is missing %s, got %v", want, systemModelDirs())
+		}
+	}
+}
+
 func TestDiscoverModels_OneBadDigestDoesNotHideOtherModels(t *testing.T) {
 	tempDir := t.TempDir()
 	library := filepath.Join(tempDir, "manifests", "registry.ollama.ai", "library")
