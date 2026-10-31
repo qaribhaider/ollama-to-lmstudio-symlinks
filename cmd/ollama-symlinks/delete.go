@@ -131,6 +131,14 @@ func findOwnedModels(ollamaDir, namePrefix string, allModels []models.ModelInfo)
 	return owned
 }
 
+// ollamaModelNamePattern matches name:tag. The first character must be
+// alphanumeric so a name can never be read as a command-line flag by `ollama rm`.
+var ollamaModelNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/-]*:[a-zA-Z0-9._-]+$`)
+
+func isSafeOllamaModelName(name string) bool {
+	return ollamaModelNamePattern.MatchString(name) && !strings.Contains(name, "..")
+}
+
 func runDeleteOllama(o options, stdin io.Reader) error {
 	// Check if Ollama manifests and blobs dirs exist
 	manifestsDir := filepath.Join(o.ollamaDir, "manifests")
@@ -150,72 +158,17 @@ func runDeleteOllama(o options, stdin io.Reader) error {
 		return fmt.Errorf("could not discover models: %w", err)
 	}
 
-	symlinkedModels := findOwnedModels(o.ollamaDir, o.namePrefix, allModels)
-
-	if len(symlinkedModels) == 0 {
+	owned := findOwnedModels(o.ollamaDir, o.namePrefix, allModels)
+	if len(owned) == 0 {
 		ui.PrintSuccess("No symlinked models found in Ollama")
 		return nil
 	}
 
-	ui.PrintInfo(fmt.Sprintf("Found %d symlinked models in Ollama:", len(symlinkedModels)))
-	for _, m := range symlinkedModels {
-		if len(m.MainModelBlobs) == 0 {
-			continue
-		}
-		blobFilename := strings.Replace(m.MainModelBlobs[0], ":", "-", 1)
-		targetPath, err := linking.SecureJoin(filepath.Join(o.ollamaDir, "blobs"), blobFilename)
+	printOwnedModels(o.ollamaDir, owned)
 
-		target := "(unsafe blob path)"
-		if err == nil {
-			if readTarget, err := os.Readlink(targetPath); err == nil {
-				target = readTarget
-			} else {
-				target = "(missing blob)"
-			}
-		}
-		ui.PrintBullet(fmt.Sprintf("%s -> %s", m.Name, target))
-	}
-	ui.PrintEmptyLine()
-
-	var options []huh.Option[string]
-	for _, m := range symlinkedModels {
-		options = append(options, huh.NewOption[string](m.Name, m.Name))
-	}
-
-	var toDeleteNames []string
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewMultiSelect[string]().
-				Title("Select models to delete").
-				Description("Use Space to toggle, Enter to confirm").
-				Options(options...).
-				Value(&toDeleteNames),
-		),
-	)
-
-	err = form.Run()
-	if err != nil {
-		if errors.Is(err, huh.ErrUserAborted) {
-			ui.PrintInfo("Cancelled")
-			return nil
-		}
+	toDelete, proceed, err := chooseModelsToDelete(owned)
+	if err != nil || !proceed {
 		return err
-	}
-
-	if len(toDeleteNames) == 0 {
-		ui.PrintWarning("No valid items selected for deletion")
-		return nil
-	}
-
-	// Map names back to ModelInfo
-	var toDelete []models.ModelInfo
-	for _, name := range toDeleteNames {
-		for _, m := range symlinkedModels {
-			if m.Name == name {
-				toDelete = append(toDelete, m)
-				break
-			}
-		}
 	}
 
 	if !o.dryRun {
@@ -229,7 +182,71 @@ func runDeleteOllama(o options, stdin io.Reader) error {
 		}
 	}
 
-	var removed, failed int
+	removed, failed := removeOllamaModels(ollamaBin, toDelete, o)
+	printResults(
+		fmt.Sprintf("Removed: %d", removed),
+		fmt.Sprintf("Failed:  %d", failed),
+	)
+	return nil
+}
+
+// printOwnedModels lists each model with the file its first blob points to.
+func printOwnedModels(ollamaDir string, owned []models.ModelInfo) {
+	ui.PrintInfo(fmt.Sprintf("Found %d symlinked models in Ollama:", len(owned)))
+	for _, m := range owned {
+		blobFilename := strings.Replace(m.MainModelBlobs[0], ":", "-", 1)
+		blobPath, err := linking.SecureJoin(filepath.Join(ollamaDir, "blobs"), blobFilename)
+
+		target := "(unsafe blob path)"
+		if err == nil {
+			if readTarget, err := os.Readlink(blobPath); err == nil {
+				target = readTarget
+			} else {
+				target = "(missing blob)"
+			}
+		}
+		ui.PrintBullet(fmt.Sprintf("%s -> %s", m.Name, target))
+	}
+	ui.PrintEmptyLine()
+}
+
+// chooseModelsToDelete asks which of owned to delete. Nothing is preselected,
+// unlike linking, because deletion is the riskier direction. proceed is false
+// when the user cancelled or selected nothing.
+func chooseModelsToDelete(owned []models.ModelInfo) (chosen []models.ModelInfo, proceed bool, err error) {
+	var options []huh.Option[string]
+	for _, m := range owned {
+		options = append(options, huh.NewOption[string](m.Name, m.Name))
+	}
+
+	var names []string
+	err = huh.NewForm(
+		huh.NewGroup(
+			huh.NewMultiSelect[string]().
+				Title("Select models to delete").
+				Description("Use Space to toggle, Enter to confirm").
+				Options(options...).
+				Value(&names),
+		),
+	).Run()
+	if err != nil {
+		if errors.Is(err, huh.ErrUserAborted) {
+			ui.PrintInfo("Cancelled")
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+
+	if len(names) == 0 {
+		ui.PrintWarning("No valid items selected for deletion")
+		return nil, false, nil
+	}
+	return filterByNames(owned, names, func(m models.ModelInfo) string { return m.Name }), true, nil
+}
+
+// removeOllamaModels deletes each model through `ollama rm`, which also cleans up
+// the manifest and blob links.
+func removeOllamaModels(ollamaBin string, toDelete []models.ModelInfo, o options) (removed, failed int) {
 	for _, m := range toDelete {
 		if o.dryRun {
 			ui.PrintMuted(fmt.Sprintf("Would remove: %s", m.Name))
@@ -241,29 +258,19 @@ func runDeleteOllama(o options, stdin io.Reader) error {
 			ui.PrintMuted(fmt.Sprintf("Deleting %s via 'ollama rm'...", m.Name))
 		}
 
-		// Use 'ollama rm' to properly clean up manifest and blob links
-		importPath := m.Name
-		// Validate model name to prevent accidental flag interpretation
-		if matched, _ := regexp.MatchString(`^[a-zA-Z0-9._/-]+:[a-zA-Z0-9._-]+$`, importPath); !matched || strings.Contains(importPath, "..") {
-			ui.PrintError(fmt.Sprintf("Refusing to run 'ollama rm' with unsafe model name: %q", importPath))
+		if !isSafeOllamaModelName(m.Name) {
+			ui.PrintError(fmt.Sprintf("Refusing to run 'ollama rm' with unsafe model name: %q", m.Name))
 			failed++
 			continue
 		}
 
-		cmd := exec.Command(ollamaBin, "rm", importPath)
-		output, err := cmd.CombinedOutput()
+		output, err := exec.Command(ollamaBin, "rm", m.Name).CombinedOutput()
 		if err != nil {
-			ui.PrintError(fmt.Sprintf("'ollama rm %s' failed: %v\nOutput: %s", importPath, err, string(output)))
+			ui.PrintError(fmt.Sprintf("'ollama rm %s' failed: %v\nOutput: %s", m.Name, err, string(output)))
 			failed++
 		} else {
 			removed++
 		}
 	}
-
-	fmt.Println(ui.FormatSummary(
-		ui.HeaderStyle.Render("Results"),
-		fmt.Sprintf("Removed: %d", removed),
-		fmt.Sprintf("Failed:  %d", failed),
-	))
-	return nil
+	return removed, failed
 }
