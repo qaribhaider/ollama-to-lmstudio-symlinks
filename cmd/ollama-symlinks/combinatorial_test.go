@@ -51,11 +51,9 @@ func TestRunApp_CombinatorialFilesystem(t *testing.T) {
 		t.Fatalf("runApp reverse failed: %v", err)
 	}
 
-	// Verify that symlinks were created in ollama blobs directory
-	blobs, _ := os.ReadDir(filepath.Join(ollamaDir, "blobs"))
-	if len(blobs) == 0 {
-		t.Errorf("Expected blobs to be created in ollama/blobs, got none")
-	}
+	// Whether blob links remain depends on whether `ollama create` succeeded, so
+	// they are not asserted here; the linking package tests cover both outcomes
+	// with a fake ollama binary.
 
 	// Now let's setup for --forward. Since ollama create didn't run, we manually create a fake manifest.
 	fakeManifest := `{"schemaVersion": 2,"mediaType": "application/vnd.docker.distribution.manifest.v2+json","config": {"mediaType": "application/vnd.docker.container.image.v1+json","digest": "sha256:configdigest","size": 123},"layers": [{"mediaType": "application/vnd.ollama.image.model","digest": "sha256:1111222233334444555566667777888899990000111122223333444455556666","size": 123}]}`
