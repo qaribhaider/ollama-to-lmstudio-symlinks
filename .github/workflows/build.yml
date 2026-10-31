@@ -10,7 +10,7 @@ on:
       - VERSION
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -69,6 +69,8 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:

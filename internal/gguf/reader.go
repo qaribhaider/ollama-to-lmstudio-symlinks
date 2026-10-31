@@ -62,7 +62,8 @@ func InspectGGUF(path string) (*GGUFInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	// Read-only file: a Close error cannot lose data.
+	defer func() { _ = f.Close() }()
 
 	return InspectGGUFReader(f)
 }
