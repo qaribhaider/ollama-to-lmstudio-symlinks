@@ -27,8 +27,7 @@ func TestGetDefaultDirs(t *testing.T) {
 	// Test OLLAMA_MODELS env var
 	customPath := filepath.Join(t.TempDir(), "custom", "ollama", "models")
 	os.MkdirAll(customPath, 0755)
-	os.Setenv("OLLAMA_MODELS", customPath)
-	defer os.Unsetenv("OLLAMA_MODELS")
+	t.Setenv("OLLAMA_MODELS", customPath)
 
 	ollamaDir = GetDefaultOllamaDir()
 	if ollamaDir != customPath {
@@ -46,8 +45,7 @@ func TestGetOllamaCandidates(t *testing.T) {
 	os.MkdirAll(path2, 0755)
 
 	// Set env var to point to one of them
-	os.Setenv("OLLAMA_MODELS", path1)
-	defer os.Unsetenv("OLLAMA_MODELS")
+	t.Setenv("OLLAMA_MODELS", path1)
 
 	candidates := GetOllamaCandidates()
 
