@@ -459,49 +459,62 @@ func ListSymlinks(dir string) ([]SymlinkInfo, error) {
 			return err
 		}
 
-		// Look for symbolic links or regular files (could be hard links)
-		if d.Type()&os.ModeSymlink != 0 || d.Type().IsRegular() {
-			target := ""
-			if d.Type()&os.ModeSymlink != 0 {
-				target, err = os.Readlink(path)
-				if err != nil {
-					return nil // Skip if we can't read it
-				}
-			} else {
-				target = "(file or hard link)"
-			}
-
-			symlinks = append(symlinks, SymlinkInfo{
-				Name:   d.Name(),
-				Path:   path,
-				Target: target,
-			})
+		info, infoErr := d.Info()
+		if infoErr != nil || !isManagedLink(info) {
+			return nil
 		}
+
+		target := "(hard link)"
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, err = os.Readlink(path)
+			if err != nil {
+				return nil // Skip if we can't read it
+			}
+		}
+
+		symlinks = append(symlinks, SymlinkInfo{
+			Name:   d.Name(),
+			Path:   path,
+			Target: target,
+		})
 		return nil
 	})
 
 	return symlinks, err
 }
 
+// isManagedLink reports whether info describes something this tool created: a
+// symlink, or a regular file with more than one hard link. A regular file with a
+// single link is original data and must never be listed or removed.
+func isManagedLink(info os.FileInfo) bool {
+	if info.Mode()&os.ModeSymlink != 0 {
+		return true
+	}
+	if !info.Mode().IsRegular() {
+		return false
+	}
+	isHardlink, _ := getHardlinkInfo("", info)
+	return isHardlink
+}
+
 func RemoveSymlinks(paths []string, dryRun bool) (int, int) {
 	var removed, failed int
 	for _, path := range paths {
-		if dryRun {
-			ui.PrintMuted(fmt.Sprintf("Would remove: %s", path))
-			removed++
-			continue
-		}
-
 		info, err := os.Lstat(path)
 		if err != nil {
 			ui.PrintError(fmt.Sprintf("Could not stat %s: %v", path, err))
 			failed++
 			continue
 		}
-		// Allow removing symlinks or regular files
-		if info.Mode()&os.ModeSymlink == 0 && !info.Mode().IsRegular() {
-			ui.PrintError(fmt.Sprintf("Refusing to remove non-link/non-file: %s", path))
+		if !isManagedLink(info) {
+			ui.PrintError(fmt.Sprintf("Refusing to remove %s: not a symlink or hard link", path))
 			failed++
+			continue
+		}
+
+		if dryRun {
+			ui.PrintMuted(fmt.Sprintf("Would remove: %s", path))
+			removed++
 			continue
 		}
 

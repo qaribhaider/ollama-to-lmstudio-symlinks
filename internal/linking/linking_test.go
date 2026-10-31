@@ -229,9 +229,9 @@ func TestListSymlinks(t *testing.T) {
 		t.Fatalf("ListSymlinks failed: %v", err)
 	}
 
-	// Should find 3 items (1 real file/hard link, 2 symlinks)
-	if len(links) != 3 {
-		t.Fatalf("Expected 3 items, got %d", len(links))
+	// Should find only the 2 symlinks; a plain file is never a managed link.
+	if len(links) != 2 {
+		t.Fatalf("Expected 2 items, got %d", len(links))
 	}
 
 	// Verify names
@@ -239,8 +239,61 @@ func TestListSymlinks(t *testing.T) {
 	for _, l := range links {
 		names[l.Name] = true
 	}
-	if !names["link.txt"] || !names["sublink.txt"] || !names["real.txt"] {
+	if !names["link.txt"] || !names["sublink.txt"] || names["real.txt"] {
 		t.Errorf("Did not find expected names: %v", names)
+	}
+}
+
+func TestListSymlinks_HardLinksListedPlainFilesIgnored(t *testing.T) {
+	tempDir := t.TempDir()
+	source := filepath.Join(t.TempDir(), "source.gguf")
+	os.WriteFile(source, []byte("weights"), 0644)
+
+	hardLink := filepath.Join(tempDir, "linked.gguf")
+	if err := os.Link(source, hardLink); err != nil {
+		t.Skipf("hard links not supported here: %v", err)
+	}
+	os.WriteFile(filepath.Join(tempDir, "original.gguf"), []byte("real weights"), 0644)
+
+	links, err := ListSymlinks(tempDir)
+	if err != nil {
+		t.Fatalf("ListSymlinks failed: %v", err)
+	}
+	if len(links) != 1 || links[0].Name != "linked.gguf" {
+		t.Fatalf("expected only linked.gguf, got %+v", links)
+	}
+}
+
+func TestRemoveSymlinks_RefusesPlainFiles(t *testing.T) {
+	tempDir := t.TempDir()
+	plain := filepath.Join(tempDir, "model.gguf")
+	os.WriteFile(plain, []byte("original weights"), 0644)
+
+	for _, dryRun := range []bool{true, false} {
+		removed, failed := RemoveSymlinks([]string{plain}, dryRun)
+		if removed != 0 || failed != 1 {
+			t.Errorf("dryRun=%v: expected 0 removed, 1 failed, got %d/%d", dryRun, removed, failed)
+		}
+		if _, err := os.Stat(plain); err != nil {
+			t.Fatalf("dryRun=%v: plain file must never be deleted: %v", dryRun, err)
+		}
+	}
+}
+
+func TestRemoveSymlinks_RemovesHardLinkKeepsSource(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "source.gguf")
+	os.WriteFile(source, []byte("weights"), 0644)
+	hardLink := filepath.Join(t.TempDir(), "linked.gguf")
+	if err := os.Link(source, hardLink); err != nil {
+		t.Skipf("hard links not supported here: %v", err)
+	}
+
+	removed, failed := RemoveSymlinks([]string{hardLink}, false)
+	if removed != 1 || failed != 0 {
+		t.Fatalf("expected 1 removed, 0 failed, got %d/%d", removed, failed)
+	}
+	if _, err := os.Stat(source); err != nil {
+		t.Fatalf("source weights must survive: %v", err)
 	}
 }
 
