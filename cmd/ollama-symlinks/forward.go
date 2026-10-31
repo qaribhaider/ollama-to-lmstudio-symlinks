@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/charmbracelet/huh"
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/linking"
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/lmstudio"
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/models"
@@ -32,88 +31,47 @@ func runForward(o options) error {
 		return err
 	}
 
-	// Discover models
 	discoveredModels, err := ollama.DiscoverModels(o.ollamaDir, o.verbose)
 	if err != nil {
 		return fmt.Errorf("error discovering models: %w", err)
 	}
-
 	if len(discoveredModels) == 0 {
 		return errors.New("no models found in Ollama directory")
 	}
 
-	if o.interactive {
-		var options []huh.Option[string]
-		for _, m := range discoveredModels {
-			options = append(options, huh.NewOption(m.Name, m.Name).Selected(true))
-		}
-		var selectedNames []string
-		err = huh.NewMultiSelect[string]().
-			Title("Select models to link").
-			Description("Use Space to toggle, Enter to confirm").
-			Options(options...).
-			Value(&selectedNames).
-			Run()
-
-		if err != nil {
-			if errors.Is(err, huh.ErrUserAborted) {
-				ui.PrintInfo("Cancelled")
-				return nil
-			}
-			return err
-		}
-
-		if len(selectedNames) == 0 {
-			ui.PrintWarning("No models selected")
-			return nil
-		}
-
-		var filtered []models.ModelInfo
-		for _, name := range selectedNames {
-			for _, m := range discoveredModels {
-				if m.Name == name {
-					filtered = append(filtered, m)
-					break
-				}
-			}
-		}
-		discoveredModels = filtered
-	} else {
-		ui.PrintSubheader(fmt.Sprintf("Found %d models", len(discoveredModels)))
-		for _, model := range discoveredModels {
-			ui.PrintBullet(model.Name)
-		}
-		ui.PrintEmptyLine()
+	toLink, proceed, err := chooseOllamaModels(discoveredModels, o.interactive)
+	if err != nil || !proceed {
+		return err
 	}
 
-	// Create ollama provider directory
-	ollamaProviderDir := filepath.Join(o.lmstudioDir, o.skipProvider)
+	providerDir := filepath.Join(o.lmstudioDir, o.skipProvider)
 	if !o.dryRun {
-		if err := os.MkdirAll(ollamaProviderDir, 0755); err != nil {
-			return fmt.Errorf("error creating ollama provider directory: %w", err)
+		if err := os.MkdirAll(providerDir, 0755); err != nil {
+			return fmt.Errorf("error creating %s provider directory: %w", o.skipProvider, err)
 		}
 	}
 
-	// Process each model
-	var created, skipped int
-	for _, model := range discoveredModels {
-		result := linking.ProcessModel(model, o.ollamaDir, ollamaProviderDir, o.dryRun, o.verbose, o.useHardlinks)
-		if result {
-			created++
-		} else {
-			skipped++
-		}
-	}
+	created, skipped := countLinked(toLink, func(m models.ModelInfo) bool {
+		return linking.ProcessModel(m, o.ollamaDir, providerDir, o.dryRun, o.verbose, o.useHardlinks)
+	})
 
-	// Summary
-	fmt.Println(ui.FormatSummary(
-		ui.HeaderStyle.Render("Results"),
+	printResults(
 		fmt.Sprintf("Linked:  %d", created),
 		fmt.Sprintf("Skipped: %d", skipped),
-	))
-
+	)
 	if created > 0 && !o.dryRun {
-		ui.PrintSuccess("Models are now available in LM Studio under the 'ollama' provider")
+		ui.PrintSuccess(fmt.Sprintf("Models are now available in LM Studio under the '%s' provider", o.skipProvider))
 	}
 	return nil
+}
+
+// chooseOllamaModels returns the models to link: the user's selection when
+// interactive, otherwise everything. proceed is false when nothing should run.
+func chooseOllamaModels(discovered []models.ModelInfo, interactive bool) (chosen []models.ModelInfo, proceed bool, err error) {
+	name := func(m models.ModelInfo) string { return m.Name }
+	if interactive {
+		return selectModels(discovered, name, name)
+	}
+	printFound("models", discovered, name)
+	return discovered, true, nil
 }

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/charmbracelet/huh"
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/linking"
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/lmstudio"
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/models"
@@ -22,103 +21,64 @@ func runReverse(o options) error {
 	}
 	ui.PrintEmptyLine()
 
-	// Pre-flight check: validate Ollama CLI
+	// Pre-flight checks
 	ollamaBin, err := ollama.ValidateOllama(o.skipChecks)
 	if err != nil {
 		return err
 	}
-
-	// Pre-flight check: validate LM Studio
 	if err := lmstudio.ValidateLMStudio(o.skipChecks, o.lmstudioDir); err != nil {
 		return err
 	}
 
-	// Discover models
 	discoveredModels, err := lmstudio.DiscoverLMStudioModels(o.lmstudioDir, o.skipProvider, o.verbose)
 	if err != nil {
 		return fmt.Errorf("error discovering models: %w", err)
 	}
-
 	if len(discoveredModels) == 0 {
 		return errors.New("no eligible models found in LM Studio directory")
 	}
 
-	if o.interactive {
-		var options []huh.Option[string]
-		for _, m := range discoveredModels {
-			label := m.Name
-			if m.ProjectorPath != "" {
-				label = fmt.Sprintf("%s [vision: %s]", m.Name, filepath.Base(m.ProjectorPath))
-			} else if len(m.ShardPaths) > 0 {
-				label = fmt.Sprintf("%s [%d shards]", m.Name, len(m.ShardPaths)+1)
-			}
-			options = append(options, huh.NewOption(label, m.Name).Selected(true))
-		}
-		var selectedNames []string
-		err = huh.NewMultiSelect[string]().
-			Title("Select models to link").
-			Description("Use Space to toggle, Enter to confirm").
-			Options(options...).
-			Value(&selectedNames).
-			Run()
-
-		if err != nil {
-			if errors.Is(err, huh.ErrUserAborted) {
-				ui.PrintInfo("Cancelled")
-				return nil
-			}
-			return err
-		}
-
-		if len(selectedNames) == 0 {
-			ui.PrintWarning("No models selected")
-			return nil
-		}
-
-		var filtered []models.LMStudioModel
-		for _, name := range selectedNames {
-			for _, m := range discoveredModels {
-				if m.Name == name {
-					filtered = append(filtered, m)
-					break
-				}
-			}
-		}
-		discoveredModels = filtered
-	} else {
-		ui.PrintSubheader(fmt.Sprintf("Found %d eligible models", len(discoveredModels)))
-		for _, model := range discoveredModels {
-			extra := ""
-			if model.ProjectorPath != "" {
-				extra = fmt.Sprintf(" [vision: %s]", filepath.Base(model.ProjectorPath))
-			} else if len(model.ShardPaths) > 0 {
-				extra = fmt.Sprintf(" [%d shards]", len(model.ShardPaths)+1)
-			}
-			ui.PrintBullet(fmt.Sprintf("%s (%s)%s", model.Name, model.Path, extra))
-		}
-		ui.PrintEmptyLine()
+	toLink, proceed, err := chooseLMStudioModels(discoveredModels, o.interactive)
+	if err != nil || !proceed {
+		return err
 	}
 
-	// Process each model
-	var created, skipped int
-	for _, model := range discoveredModels {
-		result := linking.ProcessLMStudioModel(model, o.ollamaDir, o.namePrefix, ollamaBin, o.dryRun, o.verbose, o.useHardlinks)
-		if result {
-			created++
-		} else {
-			skipped++
-		}
-	}
+	created, skipped := countLinked(toLink, func(m models.LMStudioModel) bool {
+		return linking.ProcessLMStudioModel(m, o.ollamaDir, o.namePrefix, ollamaBin, o.dryRun, o.verbose, o.useHardlinks)
+	})
 
-	// Summary
-	fmt.Println(ui.FormatSummary(
-		ui.HeaderStyle.Render("Results"),
+	printResults(
 		fmt.Sprintf("Linked:  %d", created),
 		fmt.Sprintf("Skipped: %d", skipped),
-	))
-
+	)
 	if created > 0 && !o.dryRun {
 		ui.PrintSuccess(fmt.Sprintf("Models are now available in Ollama with the '%s-' prefix", o.namePrefix))
 	}
 	return nil
+}
+
+// chooseLMStudioModels returns the models to link: the user's selection when
+// interactive, otherwise everything. proceed is false when nothing should run.
+func chooseLMStudioModels(discovered []models.LMStudioModel, interactive bool) (chosen []models.LMStudioModel, proceed bool, err error) {
+	name := func(m models.LMStudioModel) string { return m.Name }
+	if interactive {
+		return selectModels(discovered, name, func(m models.LMStudioModel) string {
+			return m.Name + modelAnnotation(m)
+		})
+	}
+	printFound("eligible models", discovered, func(m models.LMStudioModel) string {
+		return fmt.Sprintf("%s (%s)%s", m.Name, m.Path, modelAnnotation(m))
+	})
+	return discovered, true, nil
+}
+
+// modelAnnotation describes a vision projector or shard count for display.
+func modelAnnotation(m models.LMStudioModel) string {
+	if m.ProjectorPath != "" {
+		return fmt.Sprintf(" [vision: %s]", filepath.Base(m.ProjectorPath))
+	}
+	if len(m.ShardPaths) > 0 {
+		return fmt.Sprintf(" [%d shards]", len(m.ShardPaths)+1)
+	}
+	return ""
 }
