@@ -88,6 +88,9 @@ func runApp(args []string, stdin io.Reader) error {
 	if *namePrefix == "" {
 		return errors.New("--name-prefix cannot be empty")
 	}
+	if err := validateProviderName(*skipProvider); err != nil {
+		return err
+	}
 
 	// Simple subcommand handling
 	remainingArgs := fs.Args()
@@ -123,6 +126,10 @@ func runApp(args []string, stdin io.Reader) error {
 			return fmt.Errorf("unexpected argument: %s", statusFs.Args()[0])
 		}
 
+		if err := validateProviderName(*skipProvider); err != nil {
+			return err
+		}
+
 		return runStatus(*ollamaDir, *lmstudioDir, *skipProvider, *statusVerbose)
 	}
 
@@ -153,8 +160,12 @@ func runApp(args []string, stdin io.Reader) error {
 		// Re-bind global flags to deleteFs so they can be parsed after the subcommand
 		deleteFs.StringVar(ollamaDir, "ollama-dir", *ollamaDir, "Path to Ollama models directory")
 		deleteFs.StringVar(lmstudioDir, "lmstudio-dir", *lmstudioDir, "Path to LM Studio models directory")
+		deleteFs.StringVar(skipProvider, "skip-provider", *skipProvider, "Name of provider directory in LM Studio")
 
 		if err := deleteFs.Parse(remainingArgs[1:]); err != nil {
+			return err
+		}
+		if err := validateProviderName(*skipProvider); err != nil {
 			return err
 		}
 
@@ -201,8 +212,12 @@ func runApp(args []string, stdin io.Reader) error {
 			// Re-bind global flags to cleanupFs so they can be parsed after the subcommand
 			cleanupFs.StringVar(lmstudioDir, "lmstudio-dir", *lmstudioDir, "Path to LM Studio models directory")
 			cleanupFs.StringVar(ollamaDir, "ollama-dir", *ollamaDir, "Path to Ollama models directory")
+			cleanupFs.StringVar(skipProvider, "skip-provider", *skipProvider, "Name of provider directory in LM Studio")
 
 			if err := cleanupFs.Parse(remainingArgs[1:]); err != nil {
+				return err
+			}
+			if err := validateProviderName(*skipProvider); err != nil {
 				return err
 			}
 
@@ -211,7 +226,7 @@ func runApp(args []string, stdin io.Reader) error {
 				return fmt.Errorf("unexpected argument: %s", cleanupFs.Args()[0])
 			}
 
-			return runCleanup(*lmstudioDir, *ollamaDir, *cleanupDryRun, *cleanupVerbose, *cleanupSkipChecks, stdin)
+			return runCleanup(*lmstudioDir, *ollamaDir, *skipProvider, *cleanupDryRun, *cleanupVerbose, *cleanupSkipChecks, stdin)
 		}
 
 		// Unknown command
@@ -276,7 +291,7 @@ func runApp(args []string, stdin io.Reader) error {
 		if _, err := os.Stat(*ollamaDir); os.IsNotExist(err) {
 			return fmt.Errorf("Ollama directory does not exist: %s. Use --ollama-dir or --deep-scan to help find it.", *ollamaDir)
 		}
-		if err := runForward(*ollamaDir, *lmstudioDir, *dryRun, *verbose, *useHardlinks, false, *skipChecks); err != nil {
+		if err := runForward(*ollamaDir, *lmstudioDir, *skipProvider, *dryRun, *verbose, *useHardlinks, false, *skipChecks); err != nil {
 			return err
 		}
 	}
@@ -314,7 +329,7 @@ func runMainMenu(ollamaDir, lmstudioDir, namePrefix, skipProvider string, dryRun
 		if _, err := os.Stat(ollamaDir); os.IsNotExist(err) {
 			return fmt.Errorf("Ollama directory does not exist: %s. Use --ollama-dir or --deep-scan to help find it.", ollamaDir)
 		}
-		return runForward(ollamaDir, lmstudioDir, dryRun, verbose, useHardlinks, true, skipChecks)
+		return runForward(ollamaDir, lmstudioDir, skipProvider, dryRun, verbose, useHardlinks, true, skipChecks)
 	case "reverse":
 		// Check LM Studio dir exists
 		if _, err := os.Stat(lmstudioDir); os.IsNotExist(err) {
@@ -339,7 +354,7 @@ func runMainMenu(ollamaDir, lmstudioDir, namePrefix, skipProvider string, dryRun
 		}
 		return runDelete(from, ollamaDir, lmstudioDir, namePrefix, skipProvider, dryRun, verbose, skipChecks, stdin)
 	case "cleanup":
-		return runCleanup(lmstudioDir, ollamaDir, dryRun, verbose, skipChecks, stdin)
+		return runCleanup(lmstudioDir, ollamaDir, skipProvider, dryRun, verbose, skipChecks, stdin)
 	}
 
 	return nil
@@ -605,7 +620,7 @@ func runDeleteOllama(ollamaDir, namePrefix string, dryRun, verbose, skipChecks b
 	return nil
 }
 
-func runForward(ollamaDir, lmstudioDir string, dryRun, verbose, useHardlinks, interactive, skipChecks bool) error {
+func runForward(ollamaDir, lmstudioDir, skipProvider string, dryRun, verbose, useHardlinks, interactive, skipChecks bool) error {
 	ui.PrintHeader("Ollama → LM Studio Linker")
 	ui.PrintInfo(fmt.Sprintf("Ollama directory: %s", ollamaDir))
 	ui.PrintInfo(fmt.Sprintf("Target LM Studio directory: %s", lmstudioDir))
@@ -681,7 +696,7 @@ func runForward(ollamaDir, lmstudioDir string, dryRun, verbose, useHardlinks, in
 	}
 
 	// Create ollama provider directory
-	ollamaProviderDir := filepath.Join(lmstudioDir, "ollama")
+	ollamaProviderDir := filepath.Join(lmstudioDir, skipProvider)
 	if !dryRun {
 		if err := os.MkdirAll(ollamaProviderDir, 0755); err != nil {
 			return fmt.Errorf("error creating ollama provider directory: %w", err)
@@ -825,12 +840,22 @@ func runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider string, dryRun,
 	return nil
 }
 
-func runCleanup(lmstudioDir, ollamaDir string, dryRun, verbose, skipChecks bool, stdin io.Reader) error {
+// validateProviderName rejects values that would point the LM Studio provider
+// directory outside its own folder (empty, ".", "..", or containing a separator),
+// since delete and cleanup operate on everything inside it.
+func validateProviderName(name string) error {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
+		return fmt.Errorf("--skip-provider must be a plain directory name, got %q", name)
+	}
+	return nil
+}
+
+func runCleanup(lmstudioDir, ollamaDir, skipProvider string, dryRun, verbose, skipChecks bool, stdin io.Reader) error {
 	var totalBroken []linking.SymlinkInfo
 	var scanLocations []string
 
 	// 1. LM Studio managed directory
-	lmsTargetDir := filepath.Join(lmstudioDir, "ollama")
+	lmsTargetDir := filepath.Join(lmstudioDir, skipProvider)
 	if _, err := os.Stat(lmsTargetDir); err == nil {
 		scanLocations = append(scanLocations, lmsTargetDir)
 		ui.PrintSubheader("Scanning for broken symlinks in LM Studio: " + lmsTargetDir)
