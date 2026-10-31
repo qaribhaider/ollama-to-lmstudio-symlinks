@@ -153,6 +153,28 @@ func TestDiscoverModels(t *testing.T) {
 	}
 }
 
+func TestDiscoverModels_OneBadDigestDoesNotHideOtherModels(t *testing.T) {
+	tempDir := t.TempDir()
+	library := filepath.Join(tempDir, "manifests", "registry.ollama.ai", "library")
+
+	writeManifest := func(model, digest string) {
+		dir := filepath.Join(library, model)
+		os.MkdirAll(dir, 0755)
+		body := `{"layers":[{"mediaType":"application/vnd.ollama.image.model","digest":"` + digest + `"}]}`
+		os.WriteFile(filepath.Join(dir, "latest"), []byte(body), 0644)
+	}
+	writeManifest("good", "sha256:"+strings.Repeat("a", 64))
+	writeManifest("corrupt", "sha256:not-a-real-digest")
+
+	found, err := DiscoverModels(tempDir, false)
+	if err != nil {
+		t.Fatalf("one corrupt manifest must not fail discovery: %v", err)
+	}
+	if len(found) != 1 || found[0].Name != "good:latest" {
+		t.Fatalf("expected only good:latest, got %+v", found)
+	}
+}
+
 func TestDiscoverModelsResilience(t *testing.T) {
 	tempDir := t.TempDir()
 	manifestsDir := filepath.Join(tempDir, "manifests")
