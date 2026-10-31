@@ -13,7 +13,7 @@ make smoke                                    # manual, needs ollama installed; 
 
 `make smoke` runs the flows against a real Ollama using its own server and temp store (the first run downloads a small model into the user cache). Run it after changing linking, discovery or delete. Unit tests never execute a real `ollama`: a `TestMain` stubs the lookup, so keep any new test that shells out behind that stub.
 
-CI (`.github/workflows/ci.yml`) runs `go test -v ./...` and a build with `-ldflags="-X 'main.Version=$(cat VERSION)'"`. The version lives in the `VERSION` file and is injected at build time, so a plain `go build` reports a default version. A release is published only when a push to `main` changes `VERSION` (`make update-version`): `build.yml` is path-filtered to that file and fails if the tag already exists.
+PR CI (`.github/workflows/ci.yml`, Linux only) runs `golangci-lint`, `govulncheck`, `go test -v ./...` and a build with `-ldflags="-X 'main.Version=$(cat VERSION)'"`. The version lives in the `VERSION` file and is injected at build time, so a plain `go build` reports a default version. A release is published only when a push to `main` changes `VERSION` (`make update-version`): `build.yml` is path-filtered to that file and fails if the tag already exists. A PR that changes `VERSION` also runs `release-check.yml` (version validation plus tests on Linux, macOS and Windows). Workflow actions are pinned to commit SHAs; Dependabot updates them.
 
 ## Architecture
 
