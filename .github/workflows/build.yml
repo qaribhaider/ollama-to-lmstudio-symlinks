@@ -21,10 +21,10 @@ jobs:
         arch: [amd64, arm64]
     
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: "1.26"
           cache-dependency-path: go.sum
@@ -59,7 +59,7 @@ jobs:
           echo "ollama-symlinks-windows-${{ matrix.arch }}=$env:VERSION" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: binaries-${{ matrix.os }}-${{ matrix.arch }}
           path: |
@@ -70,19 +70,30 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write # publish the release
+      id-token: write # sign build provenance with GitHub's OIDC identity
+      attestations: write # store the provenance attestation
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
 
       - name: Generate checksums
         run: |
           find . -name "ollama-symlinks-*" -type f -exec sha256sum {} \; | sed 's|  .*/|  |' > checksums.txt
           cat checksums.txt
+
+      # Lets users prove a binary was built by this workflow from this repository:
+      #   gh attestation verify <file> --repo qaribhaider/ollama-to-lmstudio-symlinks
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: |
+            binaries-*/ollama-symlinks-*
+            checksums.txt
 
       - name: Read VERSION file
         id: version
@@ -96,8 +107,9 @@ jobs:
           fi
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
+          generate_release_notes: true
           tag_name: ${{ steps.version.outputs.VERSION }}
           name: Release ${{ steps.version.outputs.VERSION }}
           body: |
