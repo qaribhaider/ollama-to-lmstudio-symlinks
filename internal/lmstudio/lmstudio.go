@@ -200,11 +200,28 @@ func generateModelName(lmstudioDir, path string) string {
 	return name
 }
 
+// DiscoverLMStudioModels finds linkable models under lmstudioDir, pairing vision
+// projectors with their models and grouping shard sets. skipProvider is the
+// directory used for forward links and is never scanned.
 func DiscoverLMStudioModels(lmstudioDir, skipProvider string, verbose bool) ([]models.LMStudioModel, error) {
-	var dirList []string
-	filesByDir := make(map[string][]string)
+	dirList, filesByDir, err := collectGGUFFiles(lmstudioDir, skipProvider, verbose)
+	if err != nil {
+		return nil, err
+	}
 
-	err := filepath.Walk(lmstudioDir, func(path string, info os.FileInfo, err error) error {
+	var discovered []models.LMStudioModel
+	for _, dir := range dirList {
+		discovered = append(discovered, modelsInDir(lmstudioDir, filesByDir[dir], verbose)...)
+	}
+	return discovered, nil
+}
+
+// collectGGUFFiles walks lmstudioDir and groups real (non-symlink) .gguf files by
+// directory, returning the directories in walk order.
+func collectGGUFFiles(lmstudioDir, skipProvider string, verbose bool) (dirList []string, filesByDir map[string][]string, err error) {
+	filesByDir = make(map[string][]string)
+
+	err = filepath.Walk(lmstudioDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			if path == lmstudioDir {
 				return err
@@ -227,13 +244,7 @@ func DiscoverLMStudioModels(lmstudioDir, skipProvider string, verbose bool) ([]m
 			return nil
 		}
 
-		// Only process files
-		if info.IsDir() {
-			return nil
-		}
-
-		// Filter for GGUF files
-		if !strings.HasSuffix(strings.ToLower(info.Name()), ".gguf") {
+		if info.IsDir() || !strings.HasSuffix(strings.ToLower(info.Name()), ".gguf") {
 			return nil
 		}
 
@@ -244,128 +255,123 @@ func DiscoverLMStudioModels(lmstudioDir, skipProvider string, verbose bool) ([]m
 		filesByDir[dir] = append(filesByDir[dir], path)
 		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
+	return dirList, filesByDir, err
+}
 
-	var discoveredModels []models.LMStudioModel
-
-	for _, dir := range dirList {
-		files := filesByDir[dir]
-		var baseModels []string
-		var projectors []string
-
-		for _, file := range files {
-			isProj, arch := DeduceModelRole(file)
-			if isProj {
-				projectors = append(projectors, file)
-				if verbose {
-					if arch != "" {
-						fmt.Printf("🔍 Detected vision projector: %s (arch: %s)\n", filepath.Base(file), arch)
-					} else {
-						fmt.Printf("🔍 Detected vision projector: %s\n", filepath.Base(file))
-					}
-				}
-			} else {
-				baseModels = append(baseModels, file)
+// modelsInDir turns the .gguf files of one directory into models.
+func modelsInDir(lmstudioDir string, files []string, verbose bool) []models.LMStudioModel {
+	baseModels, projectors := splitProjectors(files, verbose)
+	if len(baseModels) == 0 {
+		if verbose {
+			for _, proj := range projectors {
+				fmt.Printf("⚠️  Skipping orphan vision projector: %s\n", proj)
 			}
 		}
+		return nil
+	}
 
-		if len(baseModels) == 0 {
-			if len(projectors) > 0 && verbose {
-				for _, proj := range projectors {
-					fmt.Printf("⚠️  Skipping orphan vision projector: %s\n", proj)
-				}
+	standalone, shardsByPrefix := splitShards(baseModels)
+
+	var found []models.LMStudioModel
+	for _, baseFile := range standalone {
+		model := models.LMStudioModel{Name: generateModelName(lmstudioDir, baseFile), Path: baseFile}
+		pairProjector(&model, projectors, "model", verbose)
+		found = append(found, model)
+	}
+	return append(found, shardedModels(lmstudioDir, shardsByPrefix, projectors, verbose)...)
+}
+
+// splitProjectors separates vision projectors from base models.
+func splitProjectors(files []string, verbose bool) (baseModels, projectors []string) {
+	for _, file := range files {
+		isProj, arch := DeduceModelRole(file)
+		if !isProj {
+			baseModels = append(baseModels, file)
+			continue
+		}
+
+		projectors = append(projectors, file)
+		if !verbose {
+			continue
+		}
+		if arch != "" {
+			fmt.Printf("🔍 Detected vision projector: %s (arch: %s)\n", filepath.Base(file), arch)
+		} else {
+			fmt.Printf("🔍 Detected vision projector: %s\n", filepath.Base(file))
+		}
+	}
+	return baseModels, projectors
+}
+
+// splitShards separates single-file models from numbered shards, which are
+// grouped by lowercase name prefix.
+func splitShards(baseModels []string) (standalone []string, shardsByPrefix map[string][]shardInfo) {
+	shardsByPrefix = make(map[string][]shardInfo)
+	for _, baseFile := range baseModels {
+		m := shardRegex.FindStringSubmatch(filepath.Base(baseFile))
+		if len(m) == 4 {
+			part, err1 := strconv.Atoi(m[2])
+			total, err2 := strconv.Atoi(m[3])
+			if err1 == nil && err2 == nil && total >= 1 && part >= 1 && part <= total {
+				prefix := strings.ToLower(m[1])
+				shardsByPrefix[prefix] = append(shardsByPrefix[prefix], shardInfo{path: baseFile, part: part, total: total})
+				continue
+			}
+		}
+		standalone = append(standalone, baseFile)
+	}
+	return standalone, shardsByPrefix
+}
+
+// shardedModels builds one model per complete shard set, in prefix order.
+func shardedModels(lmstudioDir string, shardsByPrefix map[string][]shardInfo, projectors []string, verbose bool) []models.LMStudioModel {
+	prefixes := make([]string, 0, len(shardsByPrefix))
+	for prefix := range shardsByPrefix {
+		prefixes = append(prefixes, prefix)
+	}
+	sort.Strings(prefixes)
+
+	var found []models.LMStudioModel
+	for _, prefix := range prefixes {
+		shards := shardsByPrefix[prefix]
+		sort.Slice(shards, func(i, j int) bool { return shards[i].part < shards[j].part })
+
+		if !isCompleteShardSet(shards) {
+			if verbose {
+				fmt.Printf("⚠️  Skipping incomplete sharded model group %q: found %d shards that do not form a complete set\n", prefix, len(shards))
 			}
 			continue
 		}
 
-		shardsByPrefix := make(map[string][]shardInfo)
-		var standaloneModels []string
-
-		for _, baseFile := range baseModels {
-			m := shardRegex.FindStringSubmatch(filepath.Base(baseFile))
-			if len(m) == 4 {
-				part, err1 := strconv.Atoi(m[2])
-				total, err2 := strconv.Atoi(m[3])
-				if err1 == nil && err2 == nil && total >= 1 && part >= 1 && part <= total {
-					prefix := strings.ToLower(m[1])
-					shardsByPrefix[prefix] = append(shardsByPrefix[prefix], shardInfo{
-						path:  baseFile,
-						part:  part,
-						total: total,
-					})
-					continue
-				}
-			}
-			standaloneModels = append(standaloneModels, baseFile)
+		primaryFile := shards[0].path
+		var companionShards []string
+		for _, s := range shards[1:] {
+			companionShards = append(companionShards, s.path)
 		}
 
-		// 1. Process standalone (non-sharded) models
-		for _, baseFile := range standaloneModels {
-			name := generateModelName(lmstudioDir, baseFile)
-			model := models.LMStudioModel{
-				Name: name,
-				Path: baseFile,
-			}
-			if len(projectors) > 0 {
-				model.ProjectorPath = matchProjector(baseFile, projectors)
-				if verbose && model.ProjectorPath != "" {
-					fmt.Printf("🔗 Paired model '%s' with vision projector: %s\n", name, filepath.Base(model.ProjectorPath))
-				}
-			}
-			discoveredModels = append(discoveredModels, model)
+		model := models.LMStudioModel{
+			Name:       generateModelName(lmstudioDir, primaryFile),
+			Path:       primaryFile,
+			ShardPaths: companionShards,
 		}
-
-		// 2. Process sharded models (grouped by prefix)
-		var prefixes []string
-		for prefix := range shardsByPrefix {
-			prefixes = append(prefixes, prefix)
+		pairProjector(&model, projectors, "sharded model", verbose)
+		if verbose {
+			fmt.Printf("📦 Grouped %d shards for model '%s' (primary: %s)\n", len(shards), model.Name, filepath.Base(primaryFile))
 		}
-		sort.Strings(prefixes)
-
-		for _, prefix := range prefixes {
-			shards := shardsByPrefix[prefix]
-			sort.Slice(shards, func(i, j int) bool {
-				return shards[i].part < shards[j].part
-			})
-
-			if !isCompleteShardSet(shards) {
-				if verbose {
-					fmt.Printf("⚠️  Skipping incomplete sharded model group %q: found %d shards that do not form a complete set\n", prefix, len(shards))
-				}
-				continue
-			}
-
-			primaryFile := shards[0].path
-			var companionShards []string
-			for _, s := range shards[1:] {
-				companionShards = append(companionShards, s.path)
-			}
-
-			name := generateModelName(lmstudioDir, primaryFile)
-			model := models.LMStudioModel{
-				Name:       name,
-				Path:       primaryFile,
-				ShardPaths: companionShards,
-			}
-
-			if len(projectors) > 0 {
-				model.ProjectorPath = matchProjector(primaryFile, projectors)
-				if verbose && model.ProjectorPath != "" {
-					fmt.Printf("🔗 Paired sharded model '%s' with vision projector: %s\n", name, filepath.Base(model.ProjectorPath))
-				}
-			}
-
-			if verbose {
-				fmt.Printf("📦 Grouped %d shards for model '%s' (primary: %s)\n", len(shards), name, filepath.Base(primaryFile))
-			}
-
-			discoveredModels = append(discoveredModels, model)
-		}
+		found = append(found, model)
 	}
+	return found
+}
 
-	return discoveredModels, nil
+// pairProjector attaches the best-matching vision projector to model, if any.
+func pairProjector(model *models.LMStudioModel, projectors []string, kind string, verbose bool) {
+	if len(projectors) == 0 {
+		return
+	}
+	model.ProjectorPath = matchProjector(model.Path, projectors)
+	if verbose && model.ProjectorPath != "" {
+		fmt.Printf("🔗 Paired %s '%s' with vision projector: %s\n", kind, model.Name, filepath.Base(model.ProjectorPath))
+	}
 }
 
 func ScanAllDrives() []string {
