@@ -261,6 +261,27 @@ func TestLinkBlob_RepairsDanglingBlobLink(t *testing.T) {
 	}
 }
 
+func TestSecureJoin_AllowsNamesThatOnlyStartWithDots(t *testing.T) {
+	base := t.TempDir()
+
+	for _, name := range []string{"..foo", "...", "a/..b"} {
+		got, err := SecureJoin(base, name)
+		if err != nil {
+			t.Errorf("SecureJoin(%q) rejected a name that stays inside base: %v", name, err)
+			continue
+		}
+		if want := filepath.Join(base, name); got != want {
+			t.Errorf("SecureJoin(%q) = %q, want %q", name, got, want)
+		}
+	}
+
+	for _, name := range []string{"..", "../x", "a/../../x"} {
+		if _, err := SecureJoin(base, name); err == nil {
+			t.Errorf("SecureJoin(%q) must reject traversal", name)
+		}
+	}
+}
+
 func TestIsSystemOllama(t *testing.T) {
 	for dir, want := range map[string]bool{
 		"/var/lib/ollama/.ollama/models":   true,
