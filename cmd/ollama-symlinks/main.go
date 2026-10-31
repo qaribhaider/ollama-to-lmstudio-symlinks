@@ -423,15 +423,11 @@ func runDelete(from, ollamaDir, lmstudioDir, namePrefix, skipProvider string, dr
 	}
 
 	if !dryRun {
-		var confirm bool
-		err = huh.NewConfirm().
-			Title(fmt.Sprintf("Are you sure you want to delete %d symlinks?", len(toDelete))).
-			Affirmative("Yes").
-			Negative("No").
-			Value(&confirm).
-			Run()
-
-		if err != nil || !confirm {
+		confirmed, err := askConfirm(fmt.Sprintf("Are you sure you want to delete %d symlinks?", len(toDelete)))
+		if err != nil {
+			return err
+		}
+		if !confirmed {
 			ui.PrintInfo("Cancelled")
 			return nil
 		}
@@ -567,15 +563,11 @@ func runDeleteOllama(ollamaDir, namePrefix string, dryRun, verbose, skipChecks b
 	}
 
 	if !dryRun {
-		var confirm bool
-		err = huh.NewConfirm().
-			Title(fmt.Sprintf("Are you sure you want to delete %d models from Ollama?", len(toDelete))).
-			Affirmative("Yes").
-			Negative("No").
-			Value(&confirm).
-			Run()
-
-		if err != nil || !confirm {
+		confirmed, err := askConfirm(fmt.Sprintf("Are you sure you want to delete %d models from Ollama?", len(toDelete)))
+		if err != nil {
+			return err
+		}
+		if !confirmed {
 			ui.PrintInfo("Cancelled")
 			return nil
 		}
@@ -840,6 +832,31 @@ func runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider string, dryRun,
 	return nil
 }
 
+// askConfirm shows a yes/no prompt. See confirmOutcome for how results are read.
+func askConfirm(title string) (bool, error) {
+	var confirmed bool
+	err := huh.NewConfirm().
+		Title(title).
+		Affirmative("Yes").
+		Negative("No").
+		Value(&confirmed).
+		Run()
+	return confirmOutcome(confirmed, err)
+}
+
+// confirmOutcome separates a user cancel (a plain "no") from a prompt that could
+// not run at all, such as when there is no TTY. The latter is returned so the
+// command exits non-zero instead of reporting "Cancelled" and exiting 0.
+func confirmOutcome(confirmed bool, err error) (bool, error) {
+	if errors.Is(err, huh.ErrUserAborted) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return confirmed, nil
+}
+
 // validateProviderName rejects values that would point the LM Studio provider
 // directory outside its own folder (empty, ".", "..", or containing a separator),
 // since delete and cleanup operate on everything inside it.
@@ -901,15 +918,11 @@ func runCleanup(lmstudioDir, ollamaDir, skipProvider string, dryRun, verbose, sk
 		return nil
 	}
 
-	var confirm bool
-	err := huh.NewConfirm().
-		Title(fmt.Sprintf("Are you sure you want to delete these %d broken symlink(s)?", len(totalBroken))).
-		Affirmative("Yes").
-		Negative("No").
-		Value(&confirm).
-		Run()
-
-	if err != nil || !confirm {
+	confirmed, err := askConfirm(fmt.Sprintf("Are you sure you want to delete these %d broken symlink(s)?", len(totalBroken)))
+	if err != nil {
+		return err
+	}
+	if !confirmed {
 		ui.PrintInfo("Cancelled")
 		return nil
 	}
