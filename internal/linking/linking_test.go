@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/models"
@@ -230,6 +231,23 @@ func TestProcessModel_Sharded_RollsBackWhenLaterShardFails(t *testing.T) {
 	shard1 := filepath.Join(modelDir, "sharded-model-latest-00001-of-00002.gguf")
 	if _, err := os.Lstat(shard1); err == nil {
 		t.Error("links created before the failure must be removed so a retry is not skipped")
+	}
+}
+
+func TestCreateLink_HardlinkFailureDoesNotFallBackToSymlink(t *testing.T) {
+	dir := t.TempDir()
+	missingSource := filepath.Join(dir, "missing.gguf") // os.Link fails, os.Symlink would not
+	target := filepath.Join(dir, "linked.gguf")
+
+	err := createLink(missingSource, target, true)
+	if err == nil {
+		t.Fatal("a failed hard link must be reported, not silently replaced by a symlink")
+	}
+	if !strings.Contains(err.Error(), "--hardlinks") {
+		t.Errorf("error should tell the user how to proceed, got: %v", err)
+	}
+	if _, statErr := os.Lstat(target); statErr == nil {
+		t.Error("no link of any kind should have been created")
 	}
 }
 
