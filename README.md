@@ -13,7 +13,7 @@ A fast, cross-platform Go CLI to create symbolic links between **Ollama** and **
 - 📊 **Storage Analytics (`status`)**: Measures active links, detects broken symlinks, and calculates deduplicated disk savings.
 - 🧹 **Dual-Directory Cleanup (`cleanup`)**: Scans both LM Studio and Ollama blobs to find and wipe broken ghost-links.
 - 🛡️ **Safe & Interactive (`delete`)**: Selectively remove links without touching original weights. Never overwrites existing files.
-- 💻 **Cross-Platform**: Works natively on macOS, Linux, and Windows (with `--hardlinks` fallback).
+- 💻 **Cross-Platform**: Works natively on macOS, Linux, and Windows (use `--hardlinks` where symlinks are not permitted).
 
 ---
 
@@ -111,8 +111,8 @@ ollama-symlinks delete --from ollama
 | `--name-prefix` | `lms` | Prefix for models imported into Ollama (e.g. `lms-llama-3`). |
 | `--ollama-dir` | *Auto* | Path to Ollama models directory (default: `~/.ollama/models`). |
 | `--lmstudio-dir` | *Auto* | Path to LM Studio models directory (default: `~/.cache/lm-studio/models`). |
-| `--skip-provider` | `ollama` | Provider folder name in LM Studio where links are placed. |
-| `--hardlinks` | `false` | Use hard links instead of symlinks (resolves Windows permissions / 0-byte issues). |
+| `--skip-provider` | `ollama` | Folder inside the LM Studio models directory that holds the links. Used by forward mode, `status`, `delete` and `cleanup`, and skipped by reverse mode. Must be a plain folder name. |
+| `--hardlinks` | `false` | Use hard links instead of symlinks (resolves Windows permissions / 0-byte issues). Fails with an error if a hard link cannot be made, for example across drives; it never falls back to symlinks. |
 | `--skip-checks` | `false` | Skip pre-flight executable validation checks. |
 | `--dry-run` | `false` | Preview operations without creating or modifying files. |
 | `--verbose` | `false` | Display verbose diagnostic logs. |

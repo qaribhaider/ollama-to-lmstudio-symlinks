@@ -36,6 +36,9 @@ On some Windows configurations, LM Studio cannot read standard Windows directory
 > **How Hard Links Affect Disk Space**:
 > Hard links point directly to the file data on the NTFS volume. If you run `ollama rm <model>`, disk space **will not be freed** until the linked file in LM Studio is also deleted via `ollama-symlinks delete --from lmstudio`.
 
+> [!NOTE]
+> **Hard links cannot cross drives.** If Ollama and LM Studio keep their models on different drives, `--hardlinks` stops with an error and creates nothing. It does not fall back to symlinks. Move both model folders to the same drive, or enable Developer Mode and use symlinks instead.
+
 ---
 
 ## 🔍 Common Issues
@@ -68,6 +71,8 @@ ollama-symlinks --ollama-dir="D:\Ollama\models" --lmstudio-dir="D:\LMStudio\mode
 ---
 
 ### 3. "No models found" in Ollama
+This is reported as an error and the command exits with a non-zero status, so scripts can detect that nothing was linked.
+
 Verify your Ollama manifests directory exists and contains models:
 * **macOS/Linux**: `ls -la ~/.ollama/models/manifests/`
 * **Windows**: `dir "%USERPROFILE%\.ollama\models\manifests"`
