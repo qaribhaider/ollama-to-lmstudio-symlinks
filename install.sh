@@ -9,6 +9,10 @@ REPO_NAME="ollama-to-lmstudio-symlinks"
 BINARY_NAME="ollama-symlinks"
 INSTALL_DIR="/usr/local/bin"
 
+# Release requested by the caller (VERSION=vX.Y.Z). Captured here because
+# install_binary declares its own local VERSION, which would hide the variable.
+REQUESTED_VERSION="${VERSION:-}"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -42,15 +46,18 @@ detect_system() {
     echo "${OS}-${ARCH}"
 }
 
-# Fetch latest version from GitHub API
+# Fetch latest version from GitHub API. Set VERSION=vX.Y.Z to install a specific
+# release, which also works when the API is rate limited.
 get_latest_version() {
-    if command -v curl >/dev/null 2>&1; then
-        VERSION=$(curl -s "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    VERSION="$REQUESTED_VERSION"
+
+    if [ -z "$VERSION" ] && command -v curl >/dev/null 2>&1; then
+        VERSION=$(curl -fsS --proto '=https' --tlsv1.2 "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
     fi
 
     if [ -z "$VERSION" ]; then
-        # Fallback to the current stable version if API fails (useful for local runs or rate limits)
-        VERSION="v0.3.1" 
+        log_error "Could not determine the latest version (GitHub API unavailable or rate limited). Re-run with VERSION=vX.Y.Z to choose one."
+        exit 1
     fi
 
     # Validate version string to prevent URL injection
@@ -63,9 +70,12 @@ get_latest_version() {
 }
 
 # Main installation logic
-install() {
-    local SYSTEM_INFO=$(detect_system)
-    local VERSION=$(get_latest_version)
+install_binary() {
+    # Assign separately from `local` so a failure in the command is not masked,
+    # and stop here because exit inside $(...) only ends the subshell.
+    local SYSTEM_INFO VERSION
+    SYSTEM_INFO=$(detect_system) || exit 1
+    VERSION=$(get_latest_version) || exit 1
     local DOWNLOAD_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${VERSION}/${BINARY_NAME}-${SYSTEM_INFO}"
 
     if [ "$OS" = "windows" ]; then
@@ -86,7 +96,7 @@ install() {
     trap 'rm -rf "$TMP_DIR"' EXIT
 
     # Download binary
-    if ! curl -L -o "${TMP_DIR}/${BINARY_NAME}" "$DOWNLOAD_URL"; then
+    if ! curl -fL --proto '=https' --tlsv1.2 -o "${TMP_DIR}/${BINARY_NAME}" "$DOWNLOAD_URL"; then
         log_error "Failed to download binary from $DOWNLOAD_URL"
         exit 1
     fi
@@ -95,7 +105,7 @@ install() {
     local CHECKSUM_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${VERSION}/checksums.txt"
     log_info "Verifying binary checksum..."
     local EXPECTED_CHECKSUM
-    EXPECTED_CHECKSUM=$(curl -sL "${CHECKSUM_URL}" | grep "${BINARY_NAME}-${SYSTEM_INFO}" | awk '{print $1}')
+    EXPECTED_CHECKSUM=$(curl -fsSL --proto '=https' --tlsv1.2 "${CHECKSUM_URL}" | grep "${BINARY_NAME}-${SYSTEM_INFO}" | awk '{print $1}')
     
     if [ -z "$EXPECTED_CHECKSUM" ]; then
         log_error "Could not find expected checksum for ${SYSTEM_INFO} in checksums.txt"
@@ -118,15 +128,13 @@ install() {
     fi
     log_info "Checksum verified successfully."
 
-    # Make executable
-    chmod +x "${TMP_DIR}/${BINARY_NAME}"
-
-    # Move to install directory
+    # Copy into place with the right mode. mv from /tmp is a cross-filesystem
+    # copy, so an interrupted run could leave a partial binary on the PATH.
     log_info "Installing to ${INSTALL_DIR} (may require sudo)..."
     if [ -w "$INSTALL_DIR" ]; then
-        mv "${TMP_DIR}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
+        install -m 0755 "${TMP_DIR}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}" || exit 1
     else
-        sudo mv "${TMP_DIR}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
+        sudo install -m 0755 "${TMP_DIR}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}" || exit 1
     fi
 
     log_success "${BINARY_NAME} installed successfully to ${INSTALL_DIR}"
@@ -150,5 +158,5 @@ done
 
 # Execute unless skipped (for testing)
 if [ -z "$SKIP_INSTALL" ]; then
-    install
+    install_binary
 fi
