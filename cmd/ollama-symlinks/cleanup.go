@@ -11,40 +11,26 @@ import (
 )
 
 func runCleanup(o options, stdin io.Reader) error {
-	var totalBroken []linking.SymlinkInfo
-	var scanLocations []string
-
-	// 1. LM Studio managed directory
 	lmsTargetDir := filepath.Join(o.lmstudioDir, o.skipProvider)
-	if _, err := os.Stat(lmsTargetDir); err == nil {
-		scanLocations = append(scanLocations, lmsTargetDir)
-		ui.PrintSubheader("Scanning for broken symlinks in LM Studio: " + lmsTargetDir)
-		broken, err := linking.FindBrokenSymlinks(lmsTargetDir)
-		if err != nil {
-			ui.PrintWarning(fmt.Sprintf("Could not search for broken symlinks in %s: %v", lmsTargetDir, err))
-		} else {
-			totalBroken = append(totalBroken, broken...)
-		}
+	locations := []struct{ label, dir string }{
+		{"LM Studio", lmsTargetDir},
+		{"Ollama blobs", filepath.Join(o.ollamaDir, "blobs")},
 	}
 
-	// 2. Ollama blobs directory
-	ollamaBlobsDir := filepath.Join(o.ollamaDir, "blobs")
-	if _, err := os.Stat(ollamaBlobsDir); err == nil {
-		scanLocations = append(scanLocations, ollamaBlobsDir)
-		ui.PrintSubheader("Scanning for broken symlinks in Ollama blobs: " + ollamaBlobsDir)
-		broken, err := linking.FindBrokenSymlinks(ollamaBlobsDir)
-		if err != nil {
-			ui.PrintWarning(fmt.Sprintf("Could not search for broken symlinks in %s: %v", ollamaBlobsDir, err))
-		} else {
-			totalBroken = append(totalBroken, broken...)
+	var totalBroken []linking.SymlinkInfo
+	scanned := 0
+	for _, loc := range locations {
+		broken, ok := scanForBroken(loc.label, loc.dir)
+		if ok {
+			scanned++
 		}
+		totalBroken = append(totalBroken, broken...)
 	}
 
-	if len(scanLocations) == 0 {
+	if scanned == 0 {
 		ui.PrintSuccess("No managed model directories found to clean.")
 		return nil
 	}
-
 	if len(totalBroken) == 0 {
 		ui.PrintSuccess("No broken symbolic links found across LM Studio and Ollama.")
 		return nil
@@ -76,32 +62,53 @@ func runCleanup(o options, stdin io.Reader) error {
 	}
 
 	removed, failed := linking.RemoveSymlinks(paths, false)
-	fmt.Println(ui.FormatSummary(
-		ui.HeaderStyle.Render("Results"),
+	printResults(
 		fmt.Sprintf("Removed: %d", removed),
 		fmt.Sprintf("Failed:  %d", failed),
-	))
+	)
 
-	// Clean up any empty directories in LM Studio
-	if removed > 0 && lmsTargetDir != "" {
-		if o.verbose {
-			ui.PrintMuted("Cleaning up empty model directories in LM Studio...")
-		}
-		entries, err := os.ReadDir(lmsTargetDir)
-		if err == nil {
-			for _, entry := range entries {
-				if entry.IsDir() {
-					dirPath := filepath.Join(lmsTargetDir, entry.Name())
-					if files, err := os.ReadDir(dirPath); err == nil && len(files) == 0 {
-						os.Remove(dirPath)
-						if o.verbose {
-							ui.PrintMuted(fmt.Sprintf("Removed empty directory: %s", entry.Name()))
-						}
-					}
-				}
-			}
-		}
+	if removed > 0 {
+		removeEmptySubdirs(lmsTargetDir, o.verbose)
+	}
+	return nil
+}
+
+// scanForBroken reports the broken links in dir. scanned is false when dir does
+// not exist, so callers can tell "nothing to clean" from "nothing broken".
+func scanForBroken(label, dir string) (broken []linking.SymlinkInfo, scanned bool) {
+	if _, err := os.Stat(dir); err != nil {
+		return nil, false
 	}
 
-	return nil
+	ui.PrintSubheader(fmt.Sprintf("Scanning for broken symlinks in %s: %s", label, dir))
+	broken, err := linking.FindBrokenSymlinks(dir)
+	if err != nil {
+		ui.PrintWarning(fmt.Sprintf("Could not search for broken symlinks in %s: %v", dir, err))
+		return nil, true
+	}
+	return broken, true
+}
+
+// removeEmptySubdirs deletes the model folders left empty once their links are gone.
+func removeEmptySubdirs(dir string, verbose bool) {
+	if verbose {
+		ui.PrintMuted("Cleaning up empty model directories in LM Studio...")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		subdir := filepath.Join(dir, entry.Name())
+		files, err := os.ReadDir(subdir)
+		if err != nil || len(files) > 0 {
+			continue
+		}
+		if err := os.Remove(subdir); err == nil && verbose {
+			ui.PrintMuted(fmt.Sprintf("Removed empty directory: %s", entry.Name()))
+		}
+	}
 }

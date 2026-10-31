@@ -14,7 +14,31 @@ func runStatus(o options) error {
 	ui.PrintHeader("Ollama ↔ LM Studio Status Report")
 	ui.PrintEmptyLine()
 
-	// 1. Executables & Environment
+	printEnvironment(o)
+
+	lmsTargetDir := filepath.Join(o.lmstudioDir, o.skipProvider)
+	lmsStatus, _ := linking.InspectDirectory(lmsTargetDir)
+	printDirStatus("LM Studio Models ("+lmsTargetDir+")", "Directory does not exist yet (no forward symlinks created).", lmsStatus, o.verbose)
+
+	ollamaBlobsDir := filepath.Join(o.ollamaDir, "blobs")
+	ollamaStatus, _ := linking.InspectDirectory(ollamaBlobsDir)
+	printDirStatus("Ollama Blobs ("+ollamaBlobsDir+")", "Directory does not exist yet (no reverse symlinks created).", ollamaStatus, o.verbose)
+
+	totalSaved := lmsStatus.BytesSaved + ollamaStatus.BytesSaved
+	totalActive := lmsStatus.ActiveLinks + ollamaStatus.ActiveLinks
+	totalBroken := lmsStatus.BrokenLinks + ollamaStatus.BrokenLinks
+
+	fmt.Println(ui.FormatSummary(
+		ui.HeaderStyle.Render("Storage Savings Summary"),
+		fmt.Sprintf("Active Symlinks: %d", totalActive),
+		fmt.Sprintf("Broken Symlinks: %d", totalBroken),
+		fmt.Sprintf("Total Saved:     %s", linking.FormatBytes(totalSaved)),
+	))
+
+	return nil
+}
+
+func printEnvironment(o options) {
 	fmt.Println(ui.HeaderStyle.Render("Executables & Environment"))
 	ollamaBin, ollamaErr := ollama.GetOllamaExecutable()
 	if ollamaErr == nil && ollamaBin != "" {
@@ -32,72 +56,33 @@ func runStatus(o options) error {
 		ui.PrintWarning("LM Studio:     not detected")
 	}
 	ui.PrintEmptyLine()
+}
 
-	// 2. LM Studio Managed Links (o.lmstudioDir/o.skipProvider)
-	lmsTargetDir := filepath.Join(o.lmstudioDir, o.skipProvider)
-	lmsStatus, _ := linking.InspectDirectory(lmsTargetDir)
+// printDirStatus prints one managed directory's link counts and, when verbose,
+// each link.
+func printDirStatus(title, missingMessage string, status linking.DirStatus, verbose bool) {
+	fmt.Println(ui.HeaderStyle.Render(title))
+	if !status.Exists {
+		ui.PrintMuted(missingMessage)
+		ui.PrintEmptyLine()
+		return
+	}
 
-	fmt.Println(ui.HeaderStyle.Render("LM Studio Models (" + lmsTargetDir + ")"))
-	if !lmsStatus.Exists {
-		ui.PrintMuted("Directory does not exist yet (no forward symlinks created).")
+	ui.PrintBullet(fmt.Sprintf("Active symlinks:  %d", status.ActiveLinks))
+	if status.BrokenLinks > 0 {
+		ui.PrintError(fmt.Sprintf("Broken symlinks:  %d (run 'ollama-symlinks cleanup' to remove)", status.BrokenLinks))
 	} else {
-		ui.PrintBullet(fmt.Sprintf("Active symlinks:  %d", lmsStatus.ActiveLinks))
-		if lmsStatus.BrokenLinks > 0 {
-			ui.PrintError(fmt.Sprintf("Broken symlinks:  %d (run 'ollama-symlinks cleanup' to remove)", lmsStatus.BrokenLinks))
-		} else {
-			ui.PrintBullet("Broken symlinks:  0")
-		}
-		ui.PrintBullet(fmt.Sprintf("Disk space saved: %s", linking.FormatBytes(lmsStatus.BytesSaved)))
-		if o.verbose && len(lmsStatus.Files) > 0 {
-			for _, f := range lmsStatus.Files {
-				if f.IsBroken {
-					ui.PrintMuted(fmt.Sprintf("  ✖ %s -> [broken: %s]", f.Name, f.Target))
-				} else {
-					ui.PrintMuted(fmt.Sprintf("  ✔ %s (%s)", f.Name, linking.FormatBytes(f.TargetSize)))
-				}
+		ui.PrintBullet("Broken symlinks:  0")
+	}
+	ui.PrintBullet(fmt.Sprintf("Disk space saved: %s", linking.FormatBytes(status.BytesSaved)))
+	if verbose {
+		for _, f := range status.Files {
+			if f.IsBroken {
+				ui.PrintMuted(fmt.Sprintf("  ✖ %s -> [broken: %s]", f.Name, f.Target))
+			} else {
+				ui.PrintMuted(fmt.Sprintf("  ✔ %s (%s)", f.Name, linking.FormatBytes(f.TargetSize)))
 			}
 		}
 	}
 	ui.PrintEmptyLine()
-
-	// 3. Ollama Blobs Managed Links (o.ollamaDir/blobs)
-	ollamaBlobsDir := filepath.Join(o.ollamaDir, "blobs")
-	ollamaStatus, _ := linking.InspectDirectory(ollamaBlobsDir)
-
-	fmt.Println(ui.HeaderStyle.Render("Ollama Blobs (" + ollamaBlobsDir + ")"))
-	if !ollamaStatus.Exists {
-		ui.PrintMuted("Directory does not exist yet (no reverse symlinks created).")
-	} else {
-		ui.PrintBullet(fmt.Sprintf("Active symlinks:  %d", ollamaStatus.ActiveLinks))
-		if ollamaStatus.BrokenLinks > 0 {
-			ui.PrintError(fmt.Sprintf("Broken symlinks:  %d (run 'ollama-symlinks cleanup' to remove)", ollamaStatus.BrokenLinks))
-		} else {
-			ui.PrintBullet("Broken symlinks:  0")
-		}
-		ui.PrintBullet(fmt.Sprintf("Disk space saved: %s", linking.FormatBytes(ollamaStatus.BytesSaved)))
-		if o.verbose && len(ollamaStatus.Files) > 0 {
-			for _, f := range ollamaStatus.Files {
-				if f.IsBroken {
-					ui.PrintMuted(fmt.Sprintf("  ✖ %s -> [broken: %s]", f.Name, f.Target))
-				} else {
-					ui.PrintMuted(fmt.Sprintf("  ✔ %s (%s)", f.Name, linking.FormatBytes(f.TargetSize)))
-				}
-			}
-		}
-	}
-	ui.PrintEmptyLine()
-
-	// 4. Overall Disk Savings Summary
-	totalSaved := lmsStatus.BytesSaved + ollamaStatus.BytesSaved
-	totalActive := lmsStatus.ActiveLinks + ollamaStatus.ActiveLinks
-	totalBroken := lmsStatus.BrokenLinks + ollamaStatus.BrokenLinks
-
-	fmt.Println(ui.FormatSummary(
-		ui.HeaderStyle.Render("Storage Savings Summary"),
-		fmt.Sprintf("Active Symlinks: %d", totalActive),
-		fmt.Sprintf("Broken Symlinks: %d", totalBroken),
-		fmt.Sprintf("Total Saved:     %s", linking.FormatBytes(totalSaved)),
-	))
-
-	return nil
 }
