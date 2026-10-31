@@ -99,11 +99,13 @@ func CalculateSHA256(filePath string) (string, error) {
 
 func createLink(source, target string, forceHardlink bool) error {
 	if forceHardlink {
-		if err := os.Link(source, target); err == nil {
-			return nil
+		// No symlink fallback: users pick --hardlinks because symlinks do not
+		// work for them (e.g. Windows), so a silent symlink would look linked
+		// but not behave.
+		if err := os.Link(source, target); err != nil {
+			return fmt.Errorf("could not create hard link (hard links cannot cross drives; re-run without --hardlinks to use symlinks): %w", err)
 		}
-		// Fallback to symlink if hard link fails (e.g. cross-device)
-		return os.Symlink(source, target)
+		return nil
 	}
 	return os.Symlink(source, target)
 }
