@@ -261,6 +261,18 @@ func TestLinkBlob_RepairsDanglingBlobLink(t *testing.T) {
 	}
 }
 
+func TestIsSystemOllama(t *testing.T) {
+	for dir, want := range map[string]bool{
+		"/var/lib/ollama/.ollama/models":   true,
+		"/usr/share/ollama/.ollama/models": true,
+		"/home/me/.ollama/models":          false,
+	} {
+		if got := isSystemOllama(dir); got != want {
+			t.Errorf("isSystemOllama(%q) = %v, want %v", dir, got, want)
+		}
+	}
+}
+
 func TestCreateLink_HardlinkFailureDoesNotFallBackToSymlink(t *testing.T) {
 	dir := t.TempDir()
 	missingSource := filepath.Join(dir, "missing.gguf") // os.Link fails, os.Symlink would not
