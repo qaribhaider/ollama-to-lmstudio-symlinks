@@ -1,4 +1,4 @@
-.PHONY: all build clean test version install update-version
+.PHONY: all build clean test smoke version install update-version
 
 # update-version uses bash's `read -p`
 SHELL := /bin/bash
@@ -24,6 +24,13 @@ clean:
 test:
 	@echo "Running tests..."
 	@go test -v ./...
+
+# Manual smoke tests against a real Ollama (not part of CI). They use their own
+# server and temp model store; the first run downloads a small model into the
+# user cache. Override the model with SMOKE_MODEL=name:tag.
+smoke:
+	@echo "Running smoke tests (needs ollama installed)..."
+	@go test -tags smoke -run Smoke -count=1 -v -timeout 20m ./cmd/ollama-symlinks
 
 # Show version
 version:

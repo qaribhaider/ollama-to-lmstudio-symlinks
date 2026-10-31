@@ -8,7 +8,10 @@ This file provides guidance to AI coding agents when working with code in this r
 make build                                    # go build -o ollama-symlinks ./cmd/ollama-symlinks
 make test                                     # go test -v ./...
 go test ./internal/linking -run TestName -v   # single test
+make smoke                                    # manual, needs ollama installed; not in CI
 ```
+
+`make smoke` runs the flows against a real Ollama using its own server and temp store (the first run downloads a small model into the user cache). Run it after changing linking, discovery or delete. Unit tests never execute a real `ollama`: a `TestMain` stubs the lookup, so keep any new test that shells out behind that stub.
 
 CI (`.github/workflows/ci.yml`) runs `go test -v ./...` and a build with `-ldflags="-X 'main.Version=$(cat VERSION)'"`. The version lives in the `VERSION` file and is injected at build time, so a plain `go build` reports a default version. A release is published only when a push to `main` changes `VERSION` (`make update-version`): `build.yml` is path-filtered to that file and fails if the tag already exists.
 
@@ -33,5 +36,6 @@ Layout:
 - The tool must never overwrite an existing file and must only delete links, never the original weights. Anything that lists or removes files must go through `linking.IsManagedLink` (a symlink, or a file with more than one hard link); a plain file is original data. Reverse mode skips symlinks and the provider folder to avoid circular links.
 - `--skip-provider` is one value shared by forward, reverse, status, delete and cleanup, validated by `validateProviderName`. delete and cleanup act on everything inside that folder, so never accept an empty or path-like value.
 - `--hardlinks` never falls back to symlinks: a failed hard link is an error.
+- Ollama keeps manifests in two places: `manifests/registry.ollama.ai/...` for pulled models and, on newer versions, `manifests-v2/ollama.com/...` for models created locally (which includes everything reverse mode registers). `DiscoverModels` must read both; the unit tests use fixtures, so only `make smoke` shows when Ollama changes its layout again.
 - `--hardlinks` exists because Windows symlinks need Developer Mode or admin rights and can show up as 0-byte files. See `TROUBLESHOOTING.md`.
 - `--dry-run` has to be honoured by every function that touches the filesystem; it is passed down explicitly rather than being global state.
