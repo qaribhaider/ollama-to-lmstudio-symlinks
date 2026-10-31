@@ -21,7 +21,7 @@ A single-binary Go CLI (Bubble Tea / huh for the interactive UI) that shares mod
 
 Layout:
 
-- `cmd/ollama-symlinks/main.go` is the entire command layer: `runApp` parses flags and dispatches to `runForward`, `runReverse`, `runStatus`, `runCleanup`, `runDelete`/`runDeleteOllama`, or the interactive `runMainMenu`. The `stdin` parameter is threaded through but the `huh` prompts read the real terminal, so interactive paths cannot be driven from tests; keep decisions in pure functions (`findOwnedModels`, `confirmOutcome`) and test those.
+- `cmd/ollama-symlinks` is the command layer, one file per command (`forward.go`, `reverse.go`, `delete.go`, `cleanup.go`, `status.go`). `main.go` holds `runApp`, which binds flags into an `options` struct and dispatches to those commands or the interactive `runMainMenu`; subcommands get a copy of `options`. `select.go` and `prompt.go` hold the shared selection, results and confirm helpers. The `stdin` parameter is threaded through but the `huh` prompts read the real terminal, so interactive paths cannot be driven from tests; keep decisions in pure functions (`findOwnedModels`, `confirmOutcome`) and test those.
 - `internal/ollama` and `internal/lmstudio` discover models and locate/validate the respective executables (`executable.go`, skipped with `--skip-checks`). They return the types in `internal/models`.
 - `internal/linking` does the actual file work: `ProcessModel` (forward), `ProcessLMStudioModel` (reverse), `linkBlob`, plus listing, removing, and broken-link detection. `status.go` computes the savings numbers. `hardlink_unix.go` and `hardlink_windows.go` are build-tagged and differ in how hard-link identity is detected.
 - `internal/gguf` reads GGUF headers. `internal/ui` holds shared lipgloss styles.
