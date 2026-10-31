@@ -108,6 +108,28 @@ func createLink(source, target string, forceHardlink bool) error {
 	return os.Symlink(source, target)
 }
 
+// shardLinkName returns the link filename for shard index i of total. Multi-shard
+// models use the llama.cpp convention: model-00001-of-00003.gguf.
+func shardLinkName(base string, i, total int) string {
+	if total <= 1 {
+		return base + ".gguf"
+	}
+	return fmt.Sprintf("%s-%05d-of-%05d.gguf", base, i+1, total)
+}
+
+func allShardLinksExist(modelDir, base string, total int) bool {
+	for i := 0; i < max(total, 1); i++ {
+		path, err := SecureJoin(modelDir, shardLinkName(base, i, total))
+		if err != nil {
+			return false
+		}
+		if _, err := os.Lstat(path); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
 func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, dryRun, verbose, useHardlinks bool) bool {
 	// Sanitize name for directory usage (replace : and / with - for tags and namespaces)
 	safeDirName := strings.ReplaceAll(model.Name, ":", "-")
@@ -117,18 +139,15 @@ func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, d
 		ui.PrintError(fmt.Sprintf("%v", err))
 		return false
 	}
-	firstShardFilename := safeDirName + ".gguf"
-	if len(model.MainModelBlobs) > 1 {
-		firstShardFilename = fmt.Sprintf("%s-00001-of-%05d.gguf", safeDirName, len(model.MainModelBlobs))
-	}
-	mainModelPath, err := SecureJoin(modelDir, firstShardFilename)
+	mainModelPath, err := SecureJoin(modelDir, shardLinkName(safeDirName, 0, len(model.MainModelBlobs)))
 	if err != nil {
 		ui.PrintError(fmt.Sprintf("%v", err))
 		return false
 	}
 
-	// Check if main model symlink already exists
-	if info, err := os.Lstat(mainModelPath); err == nil {
+	// The model only counts as already linked when every shard link exists; a
+	// partial set left by an interrupted run is completed below.
+	if info, err := os.Lstat(mainModelPath); err == nil && allShardLinksExist(modelDir, safeDirName, len(model.MainModelBlobs)) {
 		if info.Mode()&os.ModeSymlink == 0 && (!useHardlinks || !info.Mode().IsRegular()) {
 			ui.PrintWarning(fmt.Sprintf("%s exists but is NOT a symlink — skipping", mainModelPath))
 		} else {
@@ -146,6 +165,19 @@ func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, d
 			return false
 		}
 
+		// Remove links created by this call if a later shard fails, so a retry
+		// does not mistake the leftovers for a finished model.
+		var createdLinks []string
+		succeeded := false
+		defer func() {
+			if succeeded {
+				return
+			}
+			for _, p := range createdLinks {
+				_ = os.Remove(p)
+			}
+		}()
+
 		// Create main model link(s)
 		for i, blobDigest := range model.MainModelBlobs {
 			// Convert digest format from "sha256:hash" to "sha256-hash" for blob filename
@@ -156,11 +188,7 @@ func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, d
 				return false
 			}
 
-			destFilename := safeDirName + ".gguf"
-			if len(model.MainModelBlobs) > 1 {
-				// Use standard llama.cpp sharding convention: model-00001-of-00003.gguf
-				destFilename = fmt.Sprintf("%s-%05d-of-%05d.gguf", safeDirName, i+1, len(model.MainModelBlobs))
-			}
+			destFilename := shardLinkName(safeDirName, i, len(model.MainModelBlobs))
 
 			linkPath, err := SecureJoin(modelDir, destFilename)
 			if err != nil {
@@ -168,10 +196,15 @@ func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, d
 				return false
 			}
 
+			if _, err := os.Lstat(linkPath); err == nil {
+				continue // shard linked by an earlier, interrupted run
+			}
+
 			if err := createLink(sourcePath, linkPath, useHardlinks); err != nil {
 				ui.PrintError(fmt.Sprintf("Could not create link for %s (part %d): %v", model.Name, i+1, err))
 				return false
 			}
+			createdLinks = append(createdLinks, linkPath)
 
 			if verbose {
 				linkType := "symlink"
@@ -215,6 +248,7 @@ func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, d
 				ui.PrintSuccess(fmt.Sprintf("Additional (%s): %s -> %s", linkType, additionalPath, additionalSource))
 			}
 		}
+		succeeded = true
 	} else {
 		// Dry run - just show what would be done
 		for i, blobDigest := range model.MainModelBlobs {
@@ -225,10 +259,7 @@ func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, d
 				return false
 			}
 
-			destFilename := safeDirName + ".gguf"
-			if len(model.MainModelBlobs) > 1 {
-				destFilename = fmt.Sprintf("%s-%05d-of-%05d.gguf", safeDirName, i+1, len(model.MainModelBlobs))
-			}
+			destFilename := shardLinkName(safeDirName, i, len(model.MainModelBlobs))
 			linkPath, _ := SecureJoin(modelDir, destFilename)
 			ui.PrintMuted(fmt.Sprintf("Would create: %s -> %s", linkPath, sourcePath))
 		}
