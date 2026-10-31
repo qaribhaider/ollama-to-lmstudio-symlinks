@@ -2,7 +2,9 @@ package ollama
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -100,10 +102,44 @@ func GetOllamaCandidates() []string {
 	return existing
 }
 
+// manifestRoots are the manifest directories Ollama has used, relative to the
+// models directory. Pulled models live in the first; newer Ollama versions
+// write locally created models (including those registered by reverse mode)
+// to the second.
+var manifestRoots = []string{"manifests", "manifests-v2"}
+
 // DiscoverModels lists the models in ollamaDir's manifests. Unreadable or
 // invalid manifests are skipped so one bad file cannot hide the rest.
 func DiscoverModels(ollamaDir string, verbose bool) ([]models.ModelInfo, error) {
-	manifestsDir := filepath.Join(ollamaDir, "manifests")
+	var discovered []models.ModelInfo
+	seen := make(map[string]bool)
+
+	for i, root := range manifestRoots {
+		found, err := discoverInRoot(filepath.Join(ollamaDir, root), verbose)
+		if err != nil {
+			// The original directory must exist; later layouts are optional.
+			if i > 0 && errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			return discovered, err
+		}
+		for _, m := range found {
+			if !seen[m.Name] {
+				seen[m.Name] = true
+				discovered = append(discovered, m)
+			}
+		}
+	}
+	return discovered, nil
+}
+
+// isDefaultRegistry reports whether host is Ollama's own registry, whose
+// "library" namespace is left out of model names.
+func isDefaultRegistry(host string) bool {
+	return host == "registry.ollama.ai" || host == "ollama.com"
+}
+
+func discoverInRoot(manifestsDir string, verbose bool) ([]models.ModelInfo, error) {
 	var discoveredModels []models.ModelInfo
 
 	err := filepath.Walk(manifestsDir, func(path string, info os.FileInfo, err error) error {
@@ -182,9 +218,9 @@ func modelNameFromManifestPath(pathParts []string) string {
 	switch {
 	case len(pathParts) == 2:
 		identifier = pathParts[0]
-	case pathParts[0] == "registry.ollama.ai" && pathParts[1] == "library":
+	case isDefaultRegistry(pathParts[0]) && pathParts[1] == "library":
 		identifier = strings.Join(pathParts[2:len(pathParts)-1], "/")
-	case pathParts[0] == "registry.ollama.ai":
+	case isDefaultRegistry(pathParts[0]):
 		identifier = strings.Join(pathParts[1:len(pathParts)-1], "/")
 	default:
 		identifier = strings.Join(pathParts[:len(pathParts)-1], "/")

@@ -151,11 +151,65 @@ func TestDiscoverModels(t *testing.T) {
 	}
 }
 
+// Newer Ollama versions write locally created models to manifests-v2/ollama.com
+// instead of manifests/registry.ollama.ai.
+func TestDiscoverModels_ReadsManifestsV2Layout(t *testing.T) {
+	tempDir := t.TempDir()
+	digest := "sha256:" + strings.Repeat("b", 64)
+	body := `{"layers":[{"mediaType":"application/vnd.ollama.image.model","digest":"` + digest + `"}]}`
+
+	write := func(rel string) {
+		path := filepath.Join(tempDir, filepath.FromSlash(rel))
+		os.MkdirAll(filepath.Dir(path), 0755)
+		os.WriteFile(path, []byte(body), 0644)
+	}
+	write("manifests/registry.ollama.ai/library/pulled/latest")
+	write("manifests-v2/ollama.com/library/created/latest")
+	write("manifests-v2/ollama.com/author/custom/7b")
+
+	found, err := DiscoverModels(tempDir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, m := range found {
+		names[m.Name] = true
+	}
+	for _, want := range []string{"pulled:latest", "created:latest", "author/custom:7b"} {
+		if !names[want] {
+			t.Errorf("missing %q, discovered %v", want, names)
+		}
+	}
+}
+
+func TestDiscoverModels_ListsAModelOnceWhenBothLayoutsHoldIt(t *testing.T) {
+	tempDir := t.TempDir()
+	body := `{"layers":[{"mediaType":"application/vnd.ollama.image.model","digest":"sha256:` + strings.Repeat("c", 64) + `"}]}`
+	for _, rel := range []string{
+		"manifests/registry.ollama.ai/library/both/latest",
+		"manifests-v2/ollama.com/library/both/latest",
+	} {
+		path := filepath.Join(tempDir, filepath.FromSlash(rel))
+		os.MkdirAll(filepath.Dir(path), 0755)
+		os.WriteFile(path, []byte(body), 0644)
+	}
+
+	found, err := DiscoverModels(tempDir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 1 {
+		t.Fatalf("expected one model, got %+v", found)
+	}
+}
+
 func TestModelNameFromManifestPath(t *testing.T) {
 	tests := []struct {
 		parts []string
 		want  string
 	}{
+		{[]string{"ollama.com", "library", "created", "latest"}, "created:latest"},
+		{[]string{"ollama.com", "author", "model", "7b"}, "author/model:7b"},
 		{[]string{"registry.ollama.ai", "library", "llama3", "latest"}, "llama3:latest"},
 		{[]string{"registry.ollama.ai", "author", "model", "7b"}, "author/model:7b"},
 		{[]string{"hf.co", "author", "model", "q4"}, "hf.co/author/model:q4"},
