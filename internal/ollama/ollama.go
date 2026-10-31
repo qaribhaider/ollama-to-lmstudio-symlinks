@@ -101,6 +101,8 @@ func GetOllamaCandidates() []string {
 	return existing
 }
 
+// DiscoverModels lists the models in ollamaDir's manifests. Unreadable or
+// invalid manifests are skipped so one bad file cannot hide the rest.
 func DiscoverModels(ollamaDir string, verbose bool) ([]models.ModelInfo, error) {
 	manifestsDir := filepath.Join(ollamaDir, "manifests")
 	var discoveredModels []models.ModelInfo
@@ -115,13 +117,8 @@ func DiscoverModels(ollamaDir string, verbose bool) ([]models.ModelInfo, error) 
 			return nil
 		}
 
-		// Extract model name from path
-		// Standard: .../manifests/registry.ollama.ai/library/model_name/variant -> model_name:variant
-		// Namespaced: .../manifests/registry.ollama.ai/author/model_name/variant -> author/model_name:variant
-		// Custom/HF: .../manifests/hf.co/author/model_name/variant -> hf.co/author/model_name:variant
 		relativePath := filepath.ToSlash(strings.TrimPrefix(path, manifestsDir))
 		pathParts := strings.Split(strings.Trim(relativePath, "/"), "/")
-
 		if len(pathParts) < 2 {
 			if verbose {
 				fmt.Printf("⚠️  Skipping non-model file in manifests: %s\n", path)
@@ -129,66 +126,20 @@ func DiscoverModels(ollamaDir string, verbose bool) ([]models.ModelInfo, error) 
 			return nil
 		}
 
-		// Parse manifest file
-		// G304: path is derived from filepath.Walk, which scans the manifestsDir.
-		// We clean the path to ensure it's normalized before reading.
-		manifestData, err := os.ReadFile(filepath.Clean(path))
+		manifest, err := readManifest(path)
 		if err != nil {
 			if verbose {
-				fmt.Printf("⚠️  Could not read manifest %s: %v\n", path, err)
+				fmt.Printf("⚠️  Skipping manifest %s: %v\n", path, err)
 			}
 			return nil
 		}
 
-		var manifest models.OllamaManifest
-		if err := json.Unmarshal(manifestData, &manifest); err != nil {
-			if verbose {
-				fmt.Printf("⚠️  Skipping unparseable manifest %s: %v\n", path, err)
-			}
+		fullModelName := modelNameFromManifestPath(pathParts)
+		modelInfo, err := classifyLayers(fullModelName, manifest)
+		if err != nil {
+			// One corrupt manifest must not hide the rest of the library.
+			fmt.Printf("⚠️  Skipping %s: %v\n", fullModelName, err)
 			return nil
-		}
-
-		variant := pathParts[len(pathParts)-1]
-		var modelIdentifier string
-
-		if len(pathParts) == 2 {
-			modelIdentifier = pathParts[0]
-		} else if pathParts[0] == "registry.ollama.ai" {
-			if pathParts[1] == "library" {
-				modelIdentifier = strings.Join(pathParts[2:len(pathParts)-1], "/")
-			} else {
-				modelIdentifier = strings.Join(pathParts[1:len(pathParts)-1], "/")
-			}
-		} else {
-			modelIdentifier = strings.Join(pathParts[:len(pathParts)-1], "/")
-		}
-
-		fullModelName := fmt.Sprintf("%s:%s", modelIdentifier, variant)
-
-		// Parse layers to find model components
-		modelInfo := models.ModelInfo{
-			Name:            fullModelName,
-			AdditionalBlobs: make(map[string]string),
-		}
-
-		for _, layer := range manifest.Layers {
-			if err := ValidateDigest(layer.Digest); err != nil {
-				// One corrupt manifest must not hide the rest of the library.
-				fmt.Printf("⚠️  Skipping %s: invalid layer: %v\n", fullModelName, err)
-				return nil
-			}
-
-			switch {
-			case strings.HasPrefix(layer.MediaType, "application/vnd.ollama.image.model"):
-				modelInfo.MainModelBlobs = append(modelInfo.MainModelBlobs, layer.Digest)
-			case layer.MediaType == "application/vnd.ollama.image.projector":
-				// For multimodal models like llava
-				// Ensure filename is safe for filesystem and follows LM Studio mmproj convention
-				safeProjectorName := strings.Replace(fullModelName, ":", "-", -1)
-				safeProjectorName = strings.ReplaceAll(safeProjectorName, "/", "-")
-				projectorName := fmt.Sprintf("mmproj-%s.gguf", safeProjectorName)
-				modelInfo.AdditionalBlobs[layer.Digest] = projectorName
-			}
 		}
 
 		if len(modelInfo.MainModelBlobs) == 0 {
@@ -203,6 +154,69 @@ func DiscoverModels(ollamaDir string, verbose bool) ([]models.ModelInfo, error) 
 	})
 
 	return discoveredModels, err
+}
+
+func readManifest(path string) (models.OllamaManifest, error) {
+	var manifest models.OllamaManifest
+	// G304: path is derived from filepath.Walk, which scans the manifestsDir.
+	// We clean the path to ensure it's normalized before reading.
+	data, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return manifest, fmt.Errorf("could not read: %w", err)
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return manifest, fmt.Errorf("unparseable: %w", err)
+	}
+	return manifest, nil
+}
+
+// modelNameFromManifestPath builds "name:variant" from the path parts below the
+// manifests directory:
+//
+//	registry.ollama.ai/library/model_name/variant -> model_name:variant
+//	registry.ollama.ai/author/model_name/variant  -> author/model_name:variant
+//	hf.co/author/model_name/variant               -> hf.co/author/model_name:variant
+func modelNameFromManifestPath(pathParts []string) string {
+	variant := pathParts[len(pathParts)-1]
+
+	var identifier string
+	switch {
+	case len(pathParts) == 2:
+		identifier = pathParts[0]
+	case pathParts[0] == "registry.ollama.ai" && pathParts[1] == "library":
+		identifier = strings.Join(pathParts[2:len(pathParts)-1], "/")
+	case pathParts[0] == "registry.ollama.ai":
+		identifier = strings.Join(pathParts[1:len(pathParts)-1], "/")
+	default:
+		identifier = strings.Join(pathParts[:len(pathParts)-1], "/")
+	}
+	return fmt.Sprintf("%s:%s", identifier, variant)
+}
+
+// classifyLayers sorts a manifest's layers into the main model blobs and extra
+// components such as a vision projector. It fails on an invalid digest.
+func classifyLayers(fullModelName string, manifest models.OllamaManifest) (models.ModelInfo, error) {
+	modelInfo := models.ModelInfo{
+		Name:            fullModelName,
+		AdditionalBlobs: make(map[string]string),
+	}
+
+	for _, layer := range manifest.Layers {
+		if err := ValidateDigest(layer.Digest); err != nil {
+			return modelInfo, fmt.Errorf("invalid layer: %w", err)
+		}
+
+		switch {
+		case strings.HasPrefix(layer.MediaType, "application/vnd.ollama.image.model"):
+			modelInfo.MainModelBlobs = append(modelInfo.MainModelBlobs, layer.Digest)
+		case layer.MediaType == "application/vnd.ollama.image.projector":
+			// For multimodal models like llava. The filename follows the LM Studio
+			// mmproj convention and must be safe for the filesystem.
+			safeName := strings.NewReplacer(":", "-", "/", "-").Replace(fullModelName)
+			modelInfo.AdditionalBlobs[layer.Digest] = fmt.Sprintf("mmproj-%s.gguf", safeName)
+		}
+	}
+	return modelInfo, nil
 }
 
 func ScanAllDrives() []string {

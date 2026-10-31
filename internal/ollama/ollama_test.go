@@ -153,6 +153,23 @@ func TestDiscoverModels(t *testing.T) {
 	}
 }
 
+func TestModelNameFromManifestPath(t *testing.T) {
+	tests := []struct {
+		parts []string
+		want  string
+	}{
+		{[]string{"registry.ollama.ai", "library", "llama3", "latest"}, "llama3:latest"},
+		{[]string{"registry.ollama.ai", "author", "model", "7b"}, "author/model:7b"},
+		{[]string{"hf.co", "author", "model", "q4"}, "hf.co/author/model:q4"},
+		{[]string{"model", "tag"}, "model:tag"},
+	}
+	for _, tt := range tests {
+		if got := modelNameFromManifestPath(tt.parts); got != tt.want {
+			t.Errorf("modelNameFromManifestPath(%v) = %q, want %q", tt.parts, got, tt.want)
+		}
+	}
+}
+
 func TestSystemModelDirs_CoverServiceAndPackageInstalls(t *testing.T) {
 	got := map[string]bool{}
 	for _, d := range systemModelDirs() {
