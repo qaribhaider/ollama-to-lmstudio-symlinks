@@ -134,8 +134,7 @@ func allShardLinksExist(modelDir, base string, total int) bool {
 
 func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, dryRun, verbose, useHardlinks bool) bool {
 	// Sanitize name for directory usage (replace : and / with - for tags and namespaces)
-	safeDirName := strings.ReplaceAll(model.Name, ":", "-")
-	safeDirName = strings.ReplaceAll(safeDirName, "/", "-")
+	safeDirName := strings.NewReplacer(":", "-", "/", "-").Replace(model.Name)
 	modelDir, err := SecureJoin(ollamaProviderDir, safeDirName)
 	if err != nil {
 		ui.PrintError(fmt.Sprintf("%v", err))
@@ -160,123 +159,130 @@ func ProcessModel(model models.ModelInfo, ollamaDir, ollamaProviderDir string, d
 
 	ui.PrintInfo(fmt.Sprintf("CREATING: %s", model.Name))
 
-	if !dryRun {
-		// Create model directory
-		if err := os.MkdirAll(modelDir, 0755); err != nil {
-			ui.PrintError(fmt.Sprintf("Could not create directory for %s: %v", model.Name, err))
+	if dryRun {
+		return previewModelLinks(model, ollamaDir, modelDir, safeDirName)
+	}
+	return createModelLinks(model, ollamaDir, modelDir, safeDirName, verbose, useHardlinks)
+}
+
+// linkKind names the kind of link being created, for log messages.
+func linkKind(useHardlinks bool) string {
+	if useHardlinks {
+		return "hard link"
+	}
+	return "symlink"
+}
+
+// blobSource resolves the Ollama blob file for a "sha256:hash" digest.
+func blobSource(ollamaDir, digest string) (string, error) {
+	// Digest format "sha256:hash" becomes the blob filename "sha256-hash".
+	return SecureJoin(filepath.Join(ollamaDir, "blobs"), strings.Replace(digest, ":", "-", 1))
+}
+
+// createModelLinks links every shard and additional component of model into
+// modelDir. Links created by a failed call are removed so a retry starts clean.
+func createModelLinks(model models.ModelInfo, ollamaDir, modelDir, safeDirName string, verbose, useHardlinks bool) bool {
+	if err := os.MkdirAll(modelDir, 0755); err != nil {
+		ui.PrintError(fmt.Sprintf("Could not create directory for %s: %v", model.Name, err))
+		return false
+	}
+
+	created, ok := linkMainShards(model, ollamaDir, modelDir, safeDirName, verbose, useHardlinks)
+	if !ok {
+		for _, p := range created {
+			_ = os.Remove(p)
+		}
+		return false
+	}
+
+	linkAdditionalBlobs(model, ollamaDir, modelDir, verbose, useHardlinks)
+	return true
+}
+
+// linkMainShards creates the model's shard links and returns the paths it created.
+func linkMainShards(model models.ModelInfo, ollamaDir, modelDir, safeDirName string, verbose, useHardlinks bool) (created []string, ok bool) {
+	total := len(model.MainModelBlobs)
+	for i, blobDigest := range model.MainModelBlobs {
+		sourcePath, err := blobSource(ollamaDir, blobDigest)
+		if err != nil {
+			ui.PrintError(fmt.Sprintf("unsafe blob path from digest %q: %v", blobDigest, err))
+			return created, false
+		}
+
+		destFilename := shardLinkName(safeDirName, i, total)
+		linkPath, err := SecureJoin(modelDir, destFilename)
+		if err != nil {
+			ui.PrintError(fmt.Sprintf("unsafe link path for %s: %v", destFilename, err))
+			return created, false
+		}
+
+		if _, err := os.Lstat(linkPath); err == nil {
+			continue // shard linked by an earlier, interrupted run
+		}
+
+		if err := createLink(sourcePath, linkPath, useHardlinks); err != nil {
+			ui.PrintError(fmt.Sprintf("Could not create link for %s (part %d): %v", model.Name, i+1, err))
+			return created, false
+		}
+		created = append(created, linkPath)
+
+		if verbose {
+			ui.PrintSuccess(fmt.Sprintf("Main model (%s part %d): %s -> %s", linkKind(useHardlinks), i+1, linkPath, sourcePath))
+		}
+	}
+	return created, true
+}
+
+// linkAdditionalBlobs links extra components such as a vision projector. A
+// failure here is a warning because the main model is already usable.
+func linkAdditionalBlobs(model models.ModelInfo, ollamaDir, modelDir string, verbose, useHardlinks bool) {
+	for blobDigest, filename := range model.AdditionalBlobs {
+		additionalPath, err := SecureJoin(modelDir, filename)
+		if err != nil {
+			ui.PrintWarning(fmt.Sprintf("%v", err))
+			continue
+		}
+		additionalSource, err := blobSource(ollamaDir, blobDigest)
+		if err != nil {
+			ui.PrintWarning(fmt.Sprintf("unsafe additional blob path %q: %v", blobDigest, err))
+			continue
+		}
+
+		if _, err := os.Lstat(additionalPath); err == nil {
+			if verbose {
+				ui.PrintInfo(fmt.Sprintf("Additional component %s already exists", filename))
+			}
+			continue
+		}
+
+		if err := createLink(additionalSource, additionalPath, useHardlinks); err != nil {
+			ui.PrintWarning(fmt.Sprintf("Could not create additional link %s: %v", filename, err))
+		} else if verbose {
+			ui.PrintSuccess(fmt.Sprintf("Additional (%s): %s -> %s", linkKind(useHardlinks), additionalPath, additionalSource))
+		}
+	}
+}
+
+// previewModelLinks prints what createModelLinks would do for a dry run.
+func previewModelLinks(model models.ModelInfo, ollamaDir, modelDir, safeDirName string) bool {
+	for i, blobDigest := range model.MainModelBlobs {
+		sourcePath, err := blobSource(ollamaDir, blobDigest)
+		if err != nil {
+			ui.PrintError(fmt.Sprintf("unsafe blob path for dry run: %v", err))
 			return false
 		}
 
-		// Remove links created by this call if a later shard fails, so a retry
-		// does not mistake the leftovers for a finished model.
-		var createdLinks []string
-		succeeded := false
-		defer func() {
-			if succeeded {
-				return
-			}
-			for _, p := range createdLinks {
-				_ = os.Remove(p)
-			}
-		}()
-
-		// Create main model link(s)
-		for i, blobDigest := range model.MainModelBlobs {
-			// Convert digest format from "sha256:hash" to "sha256-hash" for blob filename
-			blobFilename := strings.Replace(blobDigest, ":", "-", 1)
-			sourcePath, err := SecureJoin(filepath.Join(ollamaDir, "blobs"), blobFilename)
-			if err != nil {
-				ui.PrintError(fmt.Sprintf("unsafe blob path from digest %q: %v", blobDigest, err))
-				return false
-			}
-
-			destFilename := shardLinkName(safeDirName, i, len(model.MainModelBlobs))
-
-			linkPath, err := SecureJoin(modelDir, destFilename)
-			if err != nil {
-				ui.PrintError(fmt.Sprintf("unsafe link path for %s: %v", destFilename, err))
-				return false
-			}
-
-			if _, err := os.Lstat(linkPath); err == nil {
-				continue // shard linked by an earlier, interrupted run
-			}
-
-			if err := createLink(sourcePath, linkPath, useHardlinks); err != nil {
-				ui.PrintError(fmt.Sprintf("Could not create link for %s (part %d): %v", model.Name, i+1, err))
-				return false
-			}
-			createdLinks = append(createdLinks, linkPath)
-
-			if verbose {
-				linkType := "symlink"
-				if useHardlinks {
-					linkType = "hard link"
-				}
-				ui.PrintSuccess(fmt.Sprintf("Main model (%s part %d): %s -> %s", linkType, i+1, linkPath, sourcePath))
-			}
-		}
-
-		// Create additional component symlinks (e.g., projector for llava)
-		for blobHash, filename := range model.AdditionalBlobs {
-			additionalPath, err := SecureJoin(modelDir, filename)
-			if err != nil {
-				ui.PrintWarning(fmt.Sprintf("%v", err))
-				continue
-			}
-			// Convert digest format from "sha256:hash" to "sha256-hash" for blob filename
-			blobFilename := strings.Replace(blobHash, ":", "-", 1)
-			additionalSource, err := SecureJoin(filepath.Join(ollamaDir, "blobs"), blobFilename)
-			if err != nil {
-				ui.PrintWarning(fmt.Sprintf("unsafe additional blob path %q: %v", blobHash, err))
-				continue
-			}
-
-			// Skip if already exists
-			if _, err := os.Lstat(additionalPath); err == nil {
-				if verbose {
-					ui.PrintInfo(fmt.Sprintf("Additional component %s already exists", filename))
-				}
-				continue
-			}
-
-			if err := createLink(additionalSource, additionalPath, useHardlinks); err != nil {
-				ui.PrintWarning(fmt.Sprintf("Could not create additional link %s: %v", filename, err))
-			} else if verbose {
-				linkType := "symlink"
-				if useHardlinks {
-					linkType = "hard link"
-				}
-				ui.PrintSuccess(fmt.Sprintf("Additional (%s): %s -> %s", linkType, additionalPath, additionalSource))
-			}
-		}
-		succeeded = true
-	} else {
-		// Dry run - just show what would be done
-		for i, blobDigest := range model.MainModelBlobs {
-			blobFilename := strings.Replace(blobDigest, ":", "-", 1)
-			sourcePath, err := SecureJoin(filepath.Join(ollamaDir, "blobs"), blobFilename)
-			if err != nil {
-				ui.PrintError(fmt.Sprintf("unsafe blob path for dry run: %v", err))
-				return false
-			}
-
-			destFilename := shardLinkName(safeDirName, i, len(model.MainModelBlobs))
-			linkPath, _ := SecureJoin(modelDir, destFilename)
-			ui.PrintMuted(fmt.Sprintf("Would create: %s -> %s", linkPath, sourcePath))
-		}
-
-		for blobHash, filename := range model.AdditionalBlobs {
-			additionalPath := filepath.Join(modelDir, filename)
-			blobFilename := strings.Replace(blobHash, ":", "-", 1)
-			additionalSource, err := SecureJoin(filepath.Join(ollamaDir, "blobs"), blobFilename)
-			if err != nil {
-				continue
-			}
-			ui.PrintMuted(fmt.Sprintf("Would create: %s -> %s", additionalPath, additionalSource))
-		}
+		linkPath, _ := SecureJoin(modelDir, shardLinkName(safeDirName, i, len(model.MainModelBlobs)))
+		ui.PrintMuted(fmt.Sprintf("Would create: %s -> %s", linkPath, sourcePath))
 	}
 
+	for blobDigest, filename := range model.AdditionalBlobs {
+		additionalSource, err := blobSource(ollamaDir, blobDigest)
+		if err != nil {
+			continue
+		}
+		ui.PrintMuted(fmt.Sprintf("Would create: %s -> %s", filepath.Join(modelDir, filename), additionalSource))
+	}
 	return true
 }
 
@@ -290,23 +296,39 @@ func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix, oll
 	}
 
 	ui.PrintInfo(fmt.Sprintf("PROCESSING: %s", model.Name))
-
 	if verbose {
-		ui.PrintMuted(fmt.Sprintf("File: %s", model.Path))
-		for i, sp := range model.ShardPaths {
-			ui.PrintMuted(fmt.Sprintf("Shard %d: %s", i+2, sp))
-		}
-		if model.ProjectorPath != "" {
-			ui.PrintMuted(fmt.Sprintf("Projector: %s", model.ProjectorPath))
-		}
+		printLMStudioModelDetails(model)
 	}
 
-	// 1. Link main model blob (primary shard)
+	if !linkModelBlobs(model, ollamaDir, dryRun, verbose, useHardlinks) {
+		return false
+	}
+
+	ollamaModelName := SanitizeModelName(fmt.Sprintf("%s-%s", namePrefix, model.Name))
+	if dryRun {
+		previewRegistration(model, ollamaModelName)
+		return true
+	}
+	return registerWithOllama(model, ollamaModelName, ollamaBin, verbose)
+}
+
+func printLMStudioModelDetails(model models.LMStudioModel) {
+	ui.PrintMuted(fmt.Sprintf("File: %s", model.Path))
+	for i, sp := range model.ShardPaths {
+		ui.PrintMuted(fmt.Sprintf("Shard %d: %s", i+2, sp))
+	}
+	if model.ProjectorPath != "" {
+		ui.PrintMuted(fmt.Sprintf("Projector: %s", model.ProjectorPath))
+	}
+}
+
+// linkModelBlobs links the primary file, companion shards and projector into
+// Ollama's blobs directory.
+func linkModelBlobs(model models.LMStudioModel, ollamaDir string, dryRun, verbose, useHardlinks bool) bool {
 	if _, ok := linkBlob(model.Path, ollamaDir, dryRun, verbose, useHardlinks); !ok {
 		return false
 	}
 
-	// 2. Link companion shard blobs if present
 	for i, shardPath := range model.ShardPaths {
 		if verbose {
 			ui.PrintInfo(fmt.Sprintf("Linking shard blob %d: %s", i+2, filepath.Base(shardPath)))
@@ -316,7 +338,6 @@ func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix, oll
 		}
 	}
 
-	// 3. Link projector blob if present
 	if model.ProjectorPath != "" {
 		if verbose {
 			ui.PrintInfo(fmt.Sprintf("Linking vision projector: %s", filepath.Base(model.ProjectorPath)))
@@ -325,77 +346,107 @@ func ProcessLMStudioModel(model models.LMStudioModel, ollamaDir, namePrefix, oll
 			return false
 		}
 	}
-
-	// 4. Register with Ollama using 'ollama create'
-	ollamaModelName := SanitizeModelName(fmt.Sprintf("%s-%s", namePrefix, model.Name))
-	if !dryRun {
-		// Ensure paths don't contain newlines to prevent Modelfile injection
-		if strings.ContainsAny(model.Path, "\n\r") {
-			ui.PrintError("Invalid model path: contains newlines")
-			return false
-		}
-		for _, sp := range model.ShardPaths {
-			if strings.ContainsAny(sp, "\n\r") {
-				ui.PrintError("Invalid shard path: contains newlines")
-				return false
-			}
-		}
-		if model.ProjectorPath != "" && strings.ContainsAny(model.ProjectorPath, "\n\r") {
-			ui.PrintError("Invalid projector path: contains newlines")
-			return false
-		}
-
-		// Create a temporary Modelfile
-		var modelfileContent string
-		if model.ProjectorPath != "" {
-			modelfileContent = fmt.Sprintf("FROM %s\nFROM %s\n", filepath.Clean(model.Path), filepath.Clean(model.ProjectorPath))
-		} else {
-			modelfileContent = fmt.Sprintf("FROM %s\n", filepath.Clean(model.Path))
-		}
-
-		tmpModelfile, err := os.CreateTemp("", "Modelfile-*")
-		if err != nil {
-			ui.PrintError(fmt.Sprintf("Could not create temporary Modelfile: %v", err))
-			return false
-		}
-		// Capture name immediately and clean it
-		tmpPath := filepath.Clean(tmpModelfile.Name())
-		defer os.Remove(tmpPath)
-
-		if _, err := tmpModelfile.WriteString(modelfileContent); err != nil {
-			ui.PrintError(fmt.Sprintf("Could not write to temporary Modelfile: %v", err))
-			return false
-		}
-		tmpModelfile.Close()
-
-		if verbose {
-			ui.PrintInfo(fmt.Sprintf("Registering with Ollama as '%s'...", ollamaModelName))
-		}
-
-		// G204: both ollamaModelName and tmpPath are sanitized/cleaned.
-		// Go's exec.Command passes arguments directly to OS, preventing shell injection.
-		cmd := exec.Command(ollamaBin, "create", ollamaModelName, "-f", tmpPath)
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			ui.PrintError(fmt.Sprintf("'ollama create' failed: %v\nOutput: %s", err, string(output)))
-			return false
-		}
-		if verbose {
-			ui.PrintSuccess("Registered successfully")
-		}
-	} else {
-		if model.ProjectorPath != "" {
-			ui.PrintMuted(fmt.Sprintf("Would register vision model with Ollama as: %s (projector: %s)", ollamaModelName, filepath.Base(model.ProjectorPath)))
-		} else if len(model.ShardPaths) > 0 {
-			ui.PrintMuted(fmt.Sprintf("Would register sharded model (%d shards) with Ollama as: %s", len(model.ShardPaths)+1, ollamaModelName))
-		} else {
-			ui.PrintMuted(fmt.Sprintf("Would register with Ollama as: %s", ollamaModelName))
-		}
-	}
-
 	return true
 }
 
+func previewRegistration(model models.LMStudioModel, ollamaModelName string) {
+	switch {
+	case model.ProjectorPath != "":
+		ui.PrintMuted(fmt.Sprintf("Would register vision model with Ollama as: %s (projector: %s)", ollamaModelName, filepath.Base(model.ProjectorPath)))
+	case len(model.ShardPaths) > 0:
+		ui.PrintMuted(fmt.Sprintf("Would register sharded model (%d shards) with Ollama as: %s", len(model.ShardPaths)+1, ollamaModelName))
+	default:
+		ui.PrintMuted(fmt.Sprintf("Would register with Ollama as: %s", ollamaModelName))
+	}
+}
+
+// registerWithOllama runs `ollama create` with a temporary Modelfile.
+func registerWithOllama(model models.LMStudioModel, ollamaModelName, ollamaBin string, verbose bool) bool {
+	if msg := modelfilePathProblem(model); msg != "" {
+		ui.PrintError(msg)
+		return false
+	}
+
+	modelfilePath, err := writeTempModelfile(model)
+	if err != nil {
+		ui.PrintError(err.Error())
+		return false
+	}
+	defer func() { _ = os.Remove(modelfilePath) }()
+
+	if verbose {
+		ui.PrintInfo(fmt.Sprintf("Registering with Ollama as '%s'...", ollamaModelName))
+	}
+
+	// G204: both ollamaModelName and modelfilePath are sanitized/cleaned.
+	// Go's exec.Command passes arguments directly to OS, preventing shell injection.
+	output, err := exec.Command(ollamaBin, "create", ollamaModelName, "-f", modelfilePath).CombinedOutput()
+	if err != nil {
+		ui.PrintError(fmt.Sprintf("'ollama create' failed: %v\nOutput: %s", err, string(output)))
+		return false
+	}
+	if verbose {
+		ui.PrintSuccess("Registered successfully")
+	}
+	return true
+}
+
+// modelfilePathProblem returns an error message when a path contains a newline,
+// which would let a crafted file name inject extra Modelfile directives.
+func modelfilePathProblem(model models.LMStudioModel) string {
+	if strings.ContainsAny(model.Path, "\n\r") {
+		return "Invalid model path: contains newlines"
+	}
+	for _, sp := range model.ShardPaths {
+		if strings.ContainsAny(sp, "\n\r") {
+			return "Invalid shard path: contains newlines"
+		}
+	}
+	if strings.ContainsAny(model.ProjectorPath, "\n\r") {
+		return "Invalid projector path: contains newlines"
+	}
+	return ""
+}
+
+// writeTempModelfile writes the Modelfile for model and returns its path; the
+// caller removes it.
+func writeTempModelfile(model models.LMStudioModel) (string, error) {
+	content := fmt.Sprintf("FROM %s\n", filepath.Clean(model.Path))
+	if model.ProjectorPath != "" {
+		content += fmt.Sprintf("FROM %s\n", filepath.Clean(model.ProjectorPath))
+	}
+
+	f, err := os.CreateTemp("", "Modelfile-*")
+	if err != nil {
+		return "", fmt.Errorf("could not create temporary Modelfile: %w", err)
+	}
+	path := filepath.Clean(f.Name())
+
+	if _, err := f.WriteString(content); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return "", fmt.Errorf("could not write to temporary Modelfile: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", fmt.Errorf("could not write to temporary Modelfile: %w", err)
+	}
+	return path, nil
+}
+
+// isSystemOllama reports whether ollamaDir is a system-wide install, whose
+// directories usually belong to the 'ollama' service user.
+func isSystemOllama(ollamaDir string) bool {
+	return strings.HasPrefix(ollamaDir, "/var/lib/ollama") || strings.HasPrefix(ollamaDir, "/usr/share/ollama")
+}
+
+// systemOllamaGroupHint returns the shell commands that give the 'ollama'
+// group write access to a system-wide install.
+func systemOllamaGroupHint(ollamaDir string) string {
+	return fmt.Sprintf("  sudo chgrp -R ollama %s\n  sudo chmod -R g+w %s", ollamaDir, ollamaDir)
+}
+
+// linkBlob links sourcePath into Ollama's blobs directory under its content hash.
 func linkBlob(sourcePath, ollamaDir string, dryRun, verbose, useHardlinks bool) (string, bool) {
 	if verbose {
 		ui.PrintMuted(fmt.Sprintf("Calculating SHA256 for %s...", filepath.Base(sourcePath)))
@@ -416,80 +467,94 @@ func linkBlob(sourcePath, ollamaDir string, dryRun, verbose, useHardlinks bool) 
 		return "", false
 	}
 
-	// Warn if source file might be inaccessible to system Ollama
-	if os.PathSeparator == '/' && strings.HasPrefix(ollamaDir, "/var/lib/ollama") {
-		if info, err := os.Stat(sourcePath); err == nil {
-			if info.Mode()&0004 == 0 { // Not world-readable
-				ui.PrintWarning(fmt.Sprintf("Note: %s is not world-readable. Ensure the 'ollama' service user has permission to read it.", filepath.Base(sourcePath)))
-			}
-		}
-	}
+	warnIfUnreadableBySystemOllama(sourcePath, ollamaDir)
 
-	// Create symlink in blobs if it doesn't exist
-	if !dryRun {
-		if err := os.MkdirAll(filepath.Join(ollamaDir, "blobs"), 0755); err != nil {
-			if os.IsPermission(err) && strings.HasPrefix(ollamaDir, "/var/lib/ollama") {
-				ui.PrintError(fmt.Sprintf("Permission denied creating directory in %s: %v\n\n"+
-					"It looks like you're using a system Ollama installation. Ensure the directory is writable by the 'ollama' group:\n\n"+
-					"  sudo chgrp -R ollama %s\n"+
-					"  sudo chmod -R g+w %s", ollamaDir, err, ollamaDir, ollamaDir))
-			} else {
-				ui.PrintError(fmt.Sprintf("Could not create blobs directory: %v", err))
-			}
-			return "", false
-		}
-
-		// A blob link whose source moved or was deleted would make Ollama fail to
-		// load the model, and the blob name is the content hash, so replacing it
-		// with a link to the file we just hashed is safe.
-		if info, err := os.Lstat(blobPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
-			if _, statErr := os.Stat(blobPath); os.IsNotExist(statErr) {
-				if err := os.Remove(blobPath); err != nil {
-					ui.PrintError(fmt.Sprintf("Could not replace broken blob link %s: %v", blobFilename, err))
-					return "", false
-				}
-				ui.PrintWarning(fmt.Sprintf("Replacing broken blob link: %s", blobFilename))
-			}
-		}
-
-		if info, err := os.Lstat(blobPath); err != nil {
-			if os.IsNotExist(err) {
-				if err := createLink(sourcePath, blobPath, useHardlinks); err != nil {
-					if os.IsPermission(err) && strings.HasPrefix(ollamaDir, "/var/lib/ollama") {
-						ui.PrintError(fmt.Sprintf("Permission denied creating link in blobs: %v\n\n"+
-							"It looks like you're using a system Ollama installation. To allow linking without sudo, "+
-							"ensure your user is in the 'ollama' group and the directory has group write permissions:\n\n"+
-							"  sudo chgrp -R ollama %s\n"+
-							"  sudo chmod -R g+w %s\n\n"+
-							"If you just added yourself to the group, you may need to logout and login again.", err, ollamaDir, ollamaDir))
-					} else {
-						ui.PrintError(fmt.Sprintf("Could not create link in blobs: %v", err))
-					}
-					return "", false
-				}
-				if verbose {
-					linkType := "symlink"
-					if useHardlinks {
-						linkType = "hard link"
-					}
-					ui.PrintSuccess(fmt.Sprintf("Created blob %s: %s", linkType, blobPath))
-				}
-			} else {
-				ui.PrintError(fmt.Sprintf("Could not access blob path: %v", err))
-				return "", false
-			}
-		} else {
-			if info.Mode()&os.ModeSymlink == 0 {
-				ui.PrintWarning(fmt.Sprintf("%s exists but is NOT a symlink — skipping", blobFilename))
-			} else if verbose {
-				ui.PrintInfo(fmt.Sprintf("Blob already exists: %s", blobFilename))
-			}
-		}
-	} else {
+	if dryRun {
 		ui.PrintMuted(fmt.Sprintf("Would create blob symlink: %s -> %s", blobPath, sourcePath))
+		return blobPath, true
 	}
 
+	if err := os.MkdirAll(filepath.Join(ollamaDir, "blobs"), 0755); err != nil {
+		if os.IsPermission(err) && isSystemOllama(ollamaDir) {
+			ui.PrintError(fmt.Sprintf("Permission denied creating directory in %s: %v\n\n"+
+				"It looks like you're using a system Ollama installation. Ensure the directory is writable by the 'ollama' group:\n\n%s",
+				ollamaDir, err, systemOllamaGroupHint(ollamaDir)))
+		} else {
+			ui.PrintError(fmt.Sprintf("Could not create blobs directory: %v", err))
+		}
+		return "", false
+	}
+
+	if !removeDanglingBlobLink(blobPath, blobFilename) {
+		return "", false
+	}
+	if !ensureBlobLink(sourcePath, blobPath, blobFilename, ollamaDir, verbose, useHardlinks) {
+		return "", false
+	}
 	return blobPath, true
+}
+
+// warnIfUnreadableBySystemOllama notes sources the 'ollama' service user could not read.
+func warnIfUnreadableBySystemOllama(sourcePath, ollamaDir string) {
+	if os.PathSeparator != '/' || !isSystemOllama(ollamaDir) {
+		return
+	}
+	if info, err := os.Stat(sourcePath); err == nil && info.Mode()&0004 == 0 { // Not world-readable
+		ui.PrintWarning(fmt.Sprintf("Note: %s is not world-readable. Ensure the 'ollama' service user has permission to read it.", filepath.Base(sourcePath)))
+	}
+}
+
+// removeDanglingBlobLink deletes a blob link whose source moved or was deleted,
+// which would make Ollama fail to load the model. The blob name is the content
+// hash, so replacing it with a link to the file we just hashed is safe.
+func removeDanglingBlobLink(blobPath, blobFilename string) bool {
+	info, err := os.Lstat(blobPath)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return true
+	}
+	if _, statErr := os.Stat(blobPath); !os.IsNotExist(statErr) {
+		return true
+	}
+
+	if err := os.Remove(blobPath); err != nil {
+		ui.PrintError(fmt.Sprintf("Could not replace broken blob link %s: %v", blobFilename, err))
+		return false
+	}
+	ui.PrintWarning(fmt.Sprintf("Replacing broken blob link: %s", blobFilename))
+	return true
+}
+
+// ensureBlobLink creates the blob link unless something is already there.
+func ensureBlobLink(sourcePath, blobPath, blobFilename, ollamaDir string, verbose, useHardlinks bool) bool {
+	info, err := os.Lstat(blobPath)
+	if err == nil {
+		if info.Mode()&os.ModeSymlink == 0 {
+			ui.PrintWarning(fmt.Sprintf("%s exists but is NOT a symlink — skipping", blobFilename))
+		} else if verbose {
+			ui.PrintInfo(fmt.Sprintf("Blob already exists: %s", blobFilename))
+		}
+		return true
+	}
+	if !os.IsNotExist(err) {
+		ui.PrintError(fmt.Sprintf("Could not access blob path: %v", err))
+		return false
+	}
+
+	if err := createLink(sourcePath, blobPath, useHardlinks); err != nil {
+		if os.IsPermission(err) && isSystemOllama(ollamaDir) {
+			ui.PrintError(fmt.Sprintf("Permission denied creating link in blobs: %v\n\n"+
+				"It looks like you're using a system Ollama installation. To allow linking without sudo, "+
+				"ensure your user is in the 'ollama' group and the directory has group write permissions:\n\n%s\n\n"+
+				"If you just added yourself to the group, you may need to logout and login again.", err, systemOllamaGroupHint(ollamaDir)))
+		} else {
+			ui.PrintError(fmt.Sprintf("Could not create link in blobs: %v", err))
+		}
+		return false
+	}
+	if verbose {
+		ui.PrintSuccess(fmt.Sprintf("Created blob %s: %s", linkKind(useHardlinks), blobPath))
+	}
+	return true
 }
 
 func ListSymlinks(dir string) ([]SymlinkInfo, error) {
