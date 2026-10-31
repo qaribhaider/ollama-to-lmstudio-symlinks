@@ -17,6 +17,14 @@ import (
 // Version of the application
 var Version = "dev"
 
+// options holds the flag values shared by every command. Subcommands receive a
+// copy, so flags parsed after the subcommand name do not leak back.
+type options struct {
+	ollamaDir, lmstudioDir, namePrefix, skipProvider string
+
+	dryRun, verbose, deepScan, interactive, useHardlinks, skipChecks, reverse bool
+}
+
 func main() {
 	if err := runApp(os.Args[1:], os.Stdin); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -29,272 +37,229 @@ func main() {
 
 func runApp(args []string, stdin io.Reader) error {
 	fs := flag.NewFlagSet("ollama-symlinks", flag.ContinueOnError)
-	fs.Usage = func() {
-		ui.PrintHeader(fmt.Sprintf("Usage: %s [command] [flags]", fs.Name()))
-		ui.PrintEmptyLine()
-
-		fmt.Println(ui.HeaderStyle.Render("Commands"))
-		fmt.Printf("  %-12s %s\n", "status", "Show active links, broken symlinks, and disk space savings")
-		fmt.Printf("  %-12s %s\n", "delete", "Interactively delete symlinks from Ollama or LM Studio")
-		fmt.Printf("  %-12s %s\n", "cleanup", "Auto-discover and remove broken symlinks")
-		ui.PrintEmptyLine()
-
-		fmt.Println(ui.HeaderStyle.Render("Flags"))
-		fs.VisitAll(func(f *flag.Flag) {
-			_, usage := flag.UnquoteUsage(f)
-			defaultText := ""
-			if f.DefValue != "" && f.DefValue != "false" {
-				defaultText = ui.MutedStyle.Render(fmt.Sprintf("(default: %q)", f.DefValue))
-			}
-			fmt.Printf("  %-18s %s %s\n", "--"+f.Name, usage, defaultText)
-		})
-		ui.PrintEmptyLine()
-	}
-
-	// Command line flags
-	var ollamaDir = fs.String("ollama-dir", ollama.GetDefaultOllamaDir(), "Path to Ollama models directory")
-	var lmstudioDir = fs.String("lmstudio-dir", lmstudio.GetDefaultLMStudioDir(), "Path to LM Studio models directory")
-	var dryRun = fs.Bool("dry-run", false, "Show what would be done without actually creating symlinks")
-	var verbose = fs.Bool("verbose", false, "Enable verbose output")
-	var deepScan = fs.Bool("deep-scan", false, "Scan all Windows drives for model directories (fallback)")
-	var showVersion = fs.Bool("version", false, "Show version information")
-
-	var interactive = fs.Bool("interactive", true, "Interactive mode (main menu and model selection)")
-	fs.BoolVar(interactive, "i", true, "Interactive mode (shorthand)")
-
-	var useHardlinks = fs.Bool("hardlinks", false, "Use hard links instead of symlinks (fixes '0 bytes' issue on Windows)")
-	var skipChecks = fs.Bool("skip-checks", false, "Skip pre-flight validation checks for Ollama and LM Studio")
-
-	// Reverse mode flags
-	var reverse = fs.Bool("reverse", false, "Link LM Studio models to Ollama (reverse mode)")
-	var namePrefix = fs.String("name-prefix", "lms", "Prefix for models created in Ollama")
-	var skipProvider = fs.String("skip-provider", "ollama", "Directory name to skip in LM Studio (to avoid circular links)")
+	var o options
+	var showVersion bool
+	bindGlobalFlags(fs, &o, &showVersion)
+	fs.Usage = func() { printUsage(fs) }
 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	if *showVersion {
+	if showVersion {
 		fmt.Printf("ollama-symlinks version %s\n", Version)
 		return nil
 	}
 
-	// Validation
-	if *namePrefix == "" {
+	if o.namePrefix == "" {
 		return errors.New("--name-prefix cannot be empty")
 	}
-	if err := validateProviderName(*skipProvider); err != nil {
+	if err := validateProviderName(o.skipProvider); err != nil {
 		return err
 	}
 
-	// Simple subcommand handling
-	remainingArgs := fs.Args()
-	if len(remainingArgs) > 0 && remainingArgs[0] == "status" {
-		statusFs := flag.NewFlagSet("status", flag.ContinueOnError)
-		statusFs.Usage = func() {
-			ui.PrintHeader(fmt.Sprintf("Usage: %s %s [flags]", fs.Name(), statusFs.Name()))
-			ui.PrintEmptyLine()
-
-			fmt.Println(ui.HeaderStyle.Render("Flags"))
-			statusFs.VisitAll(func(f *flag.Flag) {
-				_, usage := flag.UnquoteUsage(f)
-				defaultText := ""
-				if f.DefValue != "" && f.DefValue != "false" {
-					defaultText = ui.MutedStyle.Render(fmt.Sprintf("(default: %q)", f.DefValue))
-				}
-				fmt.Printf("  %-14s %s %s\n", "--"+f.Name, usage, defaultText)
-			})
-			ui.PrintEmptyLine()
-		}
-
-		statusVerbose := statusFs.Bool("verbose", *verbose, "Enable verbose output to list individual symlinks")
-		statusFs.StringVar(lmstudioDir, "lmstudio-dir", *lmstudioDir, "Path to LM Studio models directory")
-		statusFs.StringVar(ollamaDir, "ollama-dir", *ollamaDir, "Path to Ollama models directory")
-		statusFs.StringVar(skipProvider, "skip-provider", *skipProvider, "Name of provider directory in LM Studio")
-
-		if err := statusFs.Parse(remainingArgs[1:]); err != nil {
-			return err
-		}
-
-		if len(statusFs.Args()) > 0 {
-			statusFs.Usage()
-			return fmt.Errorf("unexpected argument: %s", statusFs.Args()[0])
-		}
-
-		if err := validateProviderName(*skipProvider); err != nil {
-			return err
-		}
-
-		return runStatus(*ollamaDir, *lmstudioDir, *skipProvider, *statusVerbose)
+	if rest := fs.Args(); len(rest) > 0 {
+		return runSubcommand(fs.Name(), rest, o, stdin)
 	}
 
-	if len(remainingArgs) > 0 && remainingArgs[0] == "delete" {
-		// New FlagSet for delete subcommand
-		deleteFs := flag.NewFlagSet("delete", flag.ContinueOnError)
-		deleteFs.Usage = func() {
-			ui.PrintHeader(fmt.Sprintf("Usage: %s %s [flags]", fs.Name(), deleteFs.Name()))
-			ui.PrintEmptyLine()
+	o.ollamaDir = resolveDir(o.ollamaDir, ollama.GetDefaultOllamaDir(), "Ollama", "ollama-dir", ollama.GetOllamaCandidates, ollama.ScanAllDrives, o)
+	o.lmstudioDir = resolveDir(o.lmstudioDir, lmstudio.GetDefaultLMStudioDir(), "LM Studio", "lmstudio-dir", lmstudio.GetLMStudioCandidates, lmstudio.ScanAllDrives, o)
 
-			fmt.Println(ui.HeaderStyle.Render("Flags"))
-			deleteFs.VisitAll(func(f *flag.Flag) {
-				_, usage := flag.UnquoteUsage(f)
-				defaultText := ""
-				if f.DefValue != "" && f.DefValue != "false" {
-					defaultText = ui.MutedStyle.Render(fmt.Sprintf("(default: %q)", f.DefValue))
-				}
-				fmt.Printf("  %-14s %s %s\n", "--"+f.Name, usage, defaultText)
-			})
-			ui.PrintEmptyLine()
+	return runDefault(o, stdin)
+}
+
+func bindGlobalFlags(fs *flag.FlagSet, o *options, showVersion *bool) {
+	fs.StringVar(&o.ollamaDir, "ollama-dir", ollama.GetDefaultOllamaDir(), "Path to Ollama models directory")
+	fs.StringVar(&o.lmstudioDir, "lmstudio-dir", lmstudio.GetDefaultLMStudioDir(), "Path to LM Studio models directory")
+	fs.BoolVar(&o.dryRun, "dry-run", false, "Show what would be done without actually creating symlinks")
+	fs.BoolVar(&o.verbose, "verbose", false, "Enable verbose output")
+	fs.BoolVar(&o.deepScan, "deep-scan", false, "Scan all Windows drives for model directories (fallback)")
+	fs.BoolVar(showVersion, "version", false, "Show version information")
+
+	fs.BoolVar(&o.interactive, "interactive", true, "Interactive mode (main menu and model selection)")
+	fs.BoolVar(&o.interactive, "i", true, "Interactive mode (shorthand)")
+
+	fs.BoolVar(&o.useHardlinks, "hardlinks", false, "Use hard links instead of symlinks (fixes '0 bytes' issue on Windows)")
+	fs.BoolVar(&o.skipChecks, "skip-checks", false, "Skip pre-flight validation checks for Ollama and LM Studio")
+
+	// Reverse mode flags
+	fs.BoolVar(&o.reverse, "reverse", false, "Link LM Studio models to Ollama (reverse mode)")
+	fs.StringVar(&o.namePrefix, "name-prefix", "lms", "Prefix for models created in Ollama")
+	fs.StringVar(&o.skipProvider, "skip-provider", "ollama", "Directory name to skip in LM Studio (to avoid circular links)")
+}
+
+func printUsage(fs *flag.FlagSet) {
+	ui.PrintHeader(fmt.Sprintf("Usage: %s [command] [flags]", fs.Name()))
+	ui.PrintEmptyLine()
+
+	fmt.Println(ui.HeaderStyle.Render("Commands"))
+	fmt.Printf("  %-12s %s\n", "status", "Show active links, broken symlinks, and disk space savings")
+	fmt.Printf("  %-12s %s\n", "delete", "Interactively delete symlinks from Ollama or LM Studio")
+	fmt.Printf("  %-12s %s\n", "cleanup", "Auto-discover and remove broken symlinks")
+	ui.PrintEmptyLine()
+
+	fmt.Println(ui.HeaderStyle.Render("Flags"))
+	printFlagUsage(fs, 18)
+	ui.PrintEmptyLine()
+}
+
+func printFlagUsage(fs *flag.FlagSet, nameWidth int) {
+	fs.VisitAll(func(f *flag.Flag) {
+		_, usage := flag.UnquoteUsage(f)
+		defaultText := ""
+		if f.DefValue != "" && f.DefValue != "false" {
+			defaultText = ui.MutedStyle.Render(fmt.Sprintf("(default: %q)", f.DefValue))
 		}
-		from := deleteFs.String("from", "", "Source to delete symlinks from (ollama or lmstudio)")
-		deleteDryRun := deleteFs.Bool("dry-run", *dryRun, "Show what would be deleted without actually removing them")
-		deleteVerbose := deleteFs.Bool("verbose", *verbose, "Enable verbose output")
-		deleteSkipChecks := deleteFs.Bool("skip-checks", *skipChecks, "Skip pre-flight validation checks for Ollama and LM Studio")
-		deleteNamePrefix := deleteFs.String("name-prefix", *namePrefix, "Prefix for models created in Ollama")
+		fmt.Printf("  %-*s %s %s\n", nameWidth, "--"+f.Name, usage, defaultText)
+	})
+}
 
-		// Re-bind global flags to deleteFs so they can be parsed after the subcommand
-		deleteFs.StringVar(ollamaDir, "ollama-dir", *ollamaDir, "Path to Ollama models directory")
-		deleteFs.StringVar(lmstudioDir, "lmstudio-dir", *lmstudioDir, "Path to LM Studio models directory")
-		deleteFs.StringVar(skipProvider, "skip-provider", *skipProvider, "Name of provider directory in LM Studio")
+func newSubcommandFlagSet(prog, name string) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.Usage = func() {
+		ui.PrintHeader(fmt.Sprintf("Usage: %s %s [flags]", prog, name))
+		ui.PrintEmptyLine()
 
-		if err := deleteFs.Parse(remainingArgs[1:]); err != nil {
-			return err
-		}
-		if err := validateProviderName(*skipProvider); err != nil {
-			return err
-		}
+		fmt.Println(ui.HeaderStyle.Render("Flags"))
+		printFlagUsage(fs, 14)
+		ui.PrintEmptyLine()
+	}
+	return fs
+}
 
-		if len(deleteFs.Args()) > 0 {
-			deleteFs.Usage()
-			return fmt.Errorf("unexpected argument: %s", deleteFs.Args()[0])
-		}
+// bindLocationFlags re-binds the directory flags so they can also be written
+// after the subcommand name.
+func bindLocationFlags(fs *flag.FlagSet, o *options) {
+	fs.StringVar(&o.lmstudioDir, "lmstudio-dir", o.lmstudioDir, "Path to LM Studio models directory")
+	fs.StringVar(&o.ollamaDir, "ollama-dir", o.ollamaDir, "Path to Ollama models directory")
+	fs.StringVar(&o.skipProvider, "skip-provider", o.skipProvider, "Name of provider directory in LM Studio")
+}
 
-		if *from == "" {
-			deleteFs.Usage()
-			return errors.New("--from flag is required for delete command (ollama or lmstudio)")
-		}
+func parseSubcommandFlags(fs *flag.FlagSet, args []string, o *options) error {
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if len(fs.Args()) > 0 {
+		fs.Usage()
+		return fmt.Errorf("unexpected argument: %s", fs.Args()[0])
+	}
+	return validateProviderName(o.skipProvider)
+}
 
-		if *from != "ollama" && *from != "lmstudio" {
-			return fmt.Errorf("invalid --from value: %s (must be 'ollama' or 'lmstudio')", *from)
-		}
+func runSubcommand(prog string, args []string, o options, stdin io.Reader) error {
+	switch args[0] {
+	case "status":
+		return runStatusCommand(prog, args[1:], o)
+	case "delete":
+		return runDeleteCommand(prog, args[1:], o, stdin)
+	case "cleanup":
+		return runCleanupCommand(prog, args[1:], o, stdin)
+	}
+	return fmt.Errorf("unknown command %q. Run '%s --help' for usage", args[0], prog)
+}
 
-		return runDelete(*from, *ollamaDir, *lmstudioDir, *deleteNamePrefix, *skipProvider, *deleteDryRun, *deleteVerbose, *deleteSkipChecks, stdin)
+func runStatusCommand(prog string, args []string, o options) error {
+	fs := newSubcommandFlagSet(prog, "status")
+	fs.BoolVar(&o.verbose, "verbose", o.verbose, "Enable verbose output to list individual symlinks")
+	bindLocationFlags(fs, &o)
+
+	if err := parseSubcommandFlags(fs, args, &o); err != nil {
+		return err
+	}
+	return runStatus(o)
+}
+
+func runDeleteCommand(prog string, args []string, o options, stdin io.Reader) error {
+	fs := newSubcommandFlagSet(prog, "delete")
+	from := fs.String("from", "", "Source to delete symlinks from (ollama or lmstudio)")
+	fs.BoolVar(&o.dryRun, "dry-run", o.dryRun, "Show what would be deleted without actually removing them")
+	fs.BoolVar(&o.verbose, "verbose", o.verbose, "Enable verbose output")
+	fs.BoolVar(&o.skipChecks, "skip-checks", o.skipChecks, "Skip pre-flight validation checks for Ollama and LM Studio")
+	fs.StringVar(&o.namePrefix, "name-prefix", o.namePrefix, "Prefix for models created in Ollama")
+	bindLocationFlags(fs, &o)
+
+	if err := parseSubcommandFlags(fs, args, &o); err != nil {
+		return err
 	}
 
-	if len(remainingArgs) > 0 {
-		if remainingArgs[0] == "cleanup" {
-			cleanupFs := flag.NewFlagSet("cleanup", flag.ContinueOnError)
-			cleanupFs.Usage = func() {
-				ui.PrintHeader(fmt.Sprintf("Usage: %s %s [flags]", fs.Name(), cleanupFs.Name()))
-				ui.PrintEmptyLine()
+	if *from == "" {
+		fs.Usage()
+		return errors.New("--from flag is required for delete command (ollama or lmstudio)")
+	}
+	if *from != "ollama" && *from != "lmstudio" {
+		return fmt.Errorf("invalid --from value: %s (must be 'ollama' or 'lmstudio')", *from)
+	}
+	return runDelete(*from, o, stdin)
+}
 
-				fmt.Println(ui.HeaderStyle.Render("Flags"))
-				cleanupFs.VisitAll(func(f *flag.Flag) {
-					_, usage := flag.UnquoteUsage(f)
-					defaultText := ""
-					if f.DefValue != "" && f.DefValue != "false" {
-						defaultText = ui.MutedStyle.Render(fmt.Sprintf("(default: %q)", f.DefValue))
-					}
-					fmt.Printf("  %-14s %s %s\n", "--"+f.Name, usage, defaultText)
-				})
-				ui.PrintEmptyLine()
-			}
+func runCleanupCommand(prog string, args []string, o options, stdin io.Reader) error {
+	fs := newSubcommandFlagSet(prog, "cleanup")
+	fs.BoolVar(&o.dryRun, "dry-run", o.dryRun, "Show what would be deleted without actually removing them")
+	fs.BoolVar(&o.verbose, "verbose", o.verbose, "Enable verbose output")
+	fs.BoolVar(&o.skipChecks, "skip-checks", o.skipChecks, "Skip pre-flight validation checks for Ollama and LM Studio")
+	bindLocationFlags(fs, &o)
 
-			cleanupDryRun := cleanupFs.Bool("dry-run", *dryRun, "Show what would be deleted without actually removing them")
-			cleanupVerbose := cleanupFs.Bool("verbose", *verbose, "Enable verbose output")
-			cleanupSkipChecks := cleanupFs.Bool("skip-checks", *skipChecks, "Skip pre-flight validation checks for Ollama and LM Studio")
+	if err := parseSubcommandFlags(fs, args, &o); err != nil {
+		return err
+	}
+	return runCleanup(o, stdin)
+}
 
-			// Re-bind global flags to cleanupFs so they can be parsed after the subcommand
-			cleanupFs.StringVar(lmstudioDir, "lmstudio-dir", *lmstudioDir, "Path to LM Studio models directory")
-			cleanupFs.StringVar(ollamaDir, "ollama-dir", *ollamaDir, "Path to Ollama models directory")
-			cleanupFs.StringVar(skipProvider, "skip-provider", *skipProvider, "Name of provider directory in LM Studio")
-
-			if err := cleanupFs.Parse(remainingArgs[1:]); err != nil {
-				return err
-			}
-			if err := validateProviderName(*skipProvider); err != nil {
-				return err
-			}
-
-			if len(cleanupFs.Args()) > 0 {
-				cleanupFs.Usage()
-				return fmt.Errorf("unexpected argument: %s", cleanupFs.Args()[0])
-			}
-
-			return runCleanup(*lmstudioDir, *ollamaDir, *skipProvider, *cleanupDryRun, *cleanupVerbose, *cleanupSkipChecks, stdin)
-		}
-
-		// Unknown command
-		return fmt.Errorf("unknown command %q. Run '%s --help' for usage", remainingArgs[0], fs.Name())
+// resolveDir returns dir unchanged when the user set it explicitly; otherwise it
+// picks the first existing candidate directory, optionally scanning all drives.
+func resolveDir(dir, defaultDir, label, flagName string, candidates, scanDrives func() []string, o options) string {
+	if dir != defaultDir {
+		return dir
 	}
 
-	// Path resolution with candidates
-	if *ollamaDir == ollama.GetDefaultOllamaDir() {
-		candidates := ollama.GetOllamaCandidates()
-		if *deepScan && len(candidates) == 0 {
-			if *verbose {
-				fmt.Println("🔎 Scaling all Windows drives for Ollama models...")
-			}
-			candidates = ollama.ScanAllDrives()
+	found := candidates()
+	if o.deepScan && len(found) == 0 {
+		if o.verbose {
+			fmt.Printf("🔎 Scanning all Windows drives for %s models...\n", label)
 		}
-		if len(candidates) > 1 {
-			fmt.Printf("📂 Found multiple Ollama model directories:\n")
-			for i, c := range candidates {
-				fmt.Printf("  [%d] %s\n", i+1, c)
-			}
-			fmt.Printf("Using the first one. Use --ollama-dir to override.\n\n")
-		}
-		if len(candidates) > 0 {
-			*ollamaDir = candidates[0]
-		}
+		found = scanDrives()
 	}
-
-	if *lmstudioDir == lmstudio.GetDefaultLMStudioDir() {
-		candidates := lmstudio.GetLMStudioCandidates()
-		if *deepScan && len(candidates) == 0 {
-			if *verbose {
-				fmt.Println("🔎 Scaling all Windows drives for LM Studio models...")
-			}
-			candidates = lmstudio.ScanAllDrives()
+	if len(found) > 1 {
+		fmt.Printf("📂 Found multiple %s model directories:\n", label)
+		for i, c := range found {
+			fmt.Printf("  [%d] %s\n", i+1, c)
 		}
-		if len(candidates) > 1 {
-			fmt.Printf("📂 Found multiple LM Studio model directories:\n")
-			for i, c := range candidates {
-				fmt.Printf("  [%d] %s\n", i+1, c)
-			}
-			fmt.Printf("Using the first one. Use --lmstudio-dir to override.\n\n")
-		}
-		if len(candidates) > 0 {
-			*lmstudioDir = candidates[0]
-		}
+		fmt.Printf("Using the first one. Use --%s to override.\n\n", flagName)
 	}
-
-	if *reverse {
-		// Check LM Studio dir exists
-		if _, err := os.Stat(*lmstudioDir); os.IsNotExist(err) {
-			return fmt.Errorf("LM Studio directory does not exist: %s. Use --lmstudio-dir or --deep-scan to help find it.", *lmstudioDir)
-		}
-		if err := runReverse(*lmstudioDir, *ollamaDir, *namePrefix, *skipProvider, *dryRun, *verbose, *useHardlinks, *interactive, *skipChecks); err != nil {
-			return err
-		}
-	} else {
-		if *interactive {
-			return runMainMenu(*ollamaDir, *lmstudioDir, *namePrefix, *skipProvider, *dryRun, *verbose, *useHardlinks, *skipChecks, stdin)
-		}
-
-		// Check Ollama dir exists
-		if _, err := os.Stat(*ollamaDir); os.IsNotExist(err) {
-			return fmt.Errorf("Ollama directory does not exist: %s. Use --ollama-dir or --deep-scan to help find it.", *ollamaDir)
-		}
-		if err := runForward(*ollamaDir, *lmstudioDir, *skipProvider, *dryRun, *verbose, *useHardlinks, false, *skipChecks); err != nil {
-			return err
-		}
+	if len(found) > 0 {
+		return found[0]
 	}
+	return dir
+}
 
+func requireDir(path, label, flagName string) error {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return fmt.Errorf("%s directory does not exist: %s (use --%s or --deep-scan to find it)", label, path, flagName)
+	}
 	return nil
 }
 
-func runMainMenu(ollamaDir, lmstudioDir, namePrefix, skipProvider string, dryRun, verbose, useHardlinks, skipChecks bool, stdin io.Reader) error {
+// runDefault handles the no-subcommand case: reverse linking, the interactive
+// menu, or forward linking.
+func runDefault(o options, stdin io.Reader) error {
+	if o.reverse {
+		if err := requireDir(o.lmstudioDir, "LM Studio", "lmstudio-dir"); err != nil {
+			return err
+		}
+		return runReverse(o)
+	}
+
+	if o.interactive {
+		return runMainMenu(o, stdin)
+	}
+
+	if err := requireDir(o.ollamaDir, "Ollama", "ollama-dir"); err != nil {
+		return err
+	}
+	return runForward(o)
+}
+
+func runMainMenu(o options, stdin io.Reader) error {
 	var action string
 	err := huh.NewSelect[string]().
 		Title("What would you like to do?").
@@ -316,21 +281,20 @@ func runMainMenu(ollamaDir, lmstudioDir, namePrefix, skipProvider string, dryRun
 		return err
 	}
 
+	o.interactive = true
 	switch action {
 	case "status":
-		return runStatus(ollamaDir, lmstudioDir, skipProvider, verbose)
+		return runStatus(o)
 	case "forward":
-		// Check Ollama dir exists
-		if _, err := os.Stat(ollamaDir); os.IsNotExist(err) {
-			return fmt.Errorf("Ollama directory does not exist: %s. Use --ollama-dir or --deep-scan to help find it.", ollamaDir)
+		if err := requireDir(o.ollamaDir, "Ollama", "ollama-dir"); err != nil {
+			return err
 		}
-		return runForward(ollamaDir, lmstudioDir, skipProvider, dryRun, verbose, useHardlinks, true, skipChecks)
+		return runForward(o)
 	case "reverse":
-		// Check LM Studio dir exists
-		if _, err := os.Stat(lmstudioDir); os.IsNotExist(err) {
-			return fmt.Errorf("LM Studio directory does not exist: %s. Use --lmstudio-dir or --deep-scan to help find it.", lmstudioDir)
+		if err := requireDir(o.lmstudioDir, "LM Studio", "lmstudio-dir"); err != nil {
+			return err
 		}
-		return runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider, dryRun, verbose, useHardlinks, true, skipChecks)
+		return runReverse(o)
 	case "delete":
 		var from string
 		err := huh.NewSelect[string]().
@@ -347,9 +311,9 @@ func runMainMenu(ollamaDir, lmstudioDir, namePrefix, skipProvider string, dryRun
 			}
 			return err
 		}
-		return runDelete(from, ollamaDir, lmstudioDir, namePrefix, skipProvider, dryRun, verbose, skipChecks, stdin)
+		return runDelete(from, o, stdin)
 	case "cleanup":
-		return runCleanup(lmstudioDir, ollamaDir, skipProvider, dryRun, verbose, skipChecks, stdin)
+		return runCleanup(o, stdin)
 	}
 
 	return nil

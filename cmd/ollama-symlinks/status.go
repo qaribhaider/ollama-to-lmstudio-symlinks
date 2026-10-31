@@ -10,7 +10,7 @@ import (
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/ui"
 )
 
-func runStatus(ollamaDir, lmstudioDir, skipProvider string, verbose bool) error {
+func runStatus(o options) error {
 	ui.PrintHeader("Ollama ↔ LM Studio Status Report")
 	ui.PrintEmptyLine()
 
@@ -26,15 +26,15 @@ func runStatus(ollamaDir, lmstudioDir, skipProvider string, verbose bool) error 
 	lmsBin, lmsErr := lmstudio.GetLMStudioExecutable()
 	if lmsErr == nil && lmsBin != "" {
 		ui.PrintBullet(fmt.Sprintf("LM Studio CLI: installed (%s)", lmsBin))
-	} else if lmstudio.IsLMStudioInstalled(lmstudioDir) {
+	} else if lmstudio.IsLMStudioInstalled(o.lmstudioDir) {
 		ui.PrintBullet("LM Studio:     models directory detected")
 	} else {
 		ui.PrintWarning("LM Studio:     not detected")
 	}
 	ui.PrintEmptyLine()
 
-	// 2. LM Studio Managed Links (lmstudioDir/skipProvider)
-	lmsTargetDir := filepath.Join(lmstudioDir, skipProvider)
+	// 2. LM Studio Managed Links (o.lmstudioDir/o.skipProvider)
+	lmsTargetDir := filepath.Join(o.lmstudioDir, o.skipProvider)
 	lmsStatus, _ := linking.InspectDirectory(lmsTargetDir)
 
 	fmt.Println(ui.HeaderStyle.Render("LM Studio Models (" + lmsTargetDir + ")"))
@@ -48,7 +48,7 @@ func runStatus(ollamaDir, lmstudioDir, skipProvider string, verbose bool) error 
 			ui.PrintBullet("Broken symlinks:  0")
 		}
 		ui.PrintBullet(fmt.Sprintf("Disk space saved: %s", linking.FormatBytes(lmsStatus.BytesSaved)))
-		if verbose && len(lmsStatus.Files) > 0 {
+		if o.verbose && len(lmsStatus.Files) > 0 {
 			for _, f := range lmsStatus.Files {
 				if f.IsBroken {
 					ui.PrintMuted(fmt.Sprintf("  ✖ %s -> [broken: %s]", f.Name, f.Target))
@@ -60,8 +60,8 @@ func runStatus(ollamaDir, lmstudioDir, skipProvider string, verbose bool) error 
 	}
 	ui.PrintEmptyLine()
 
-	// 3. Ollama Blobs Managed Links (ollamaDir/blobs)
-	ollamaBlobsDir := filepath.Join(ollamaDir, "blobs")
+	// 3. Ollama Blobs Managed Links (o.ollamaDir/blobs)
+	ollamaBlobsDir := filepath.Join(o.ollamaDir, "blobs")
 	ollamaStatus, _ := linking.InspectDirectory(ollamaBlobsDir)
 
 	fmt.Println(ui.HeaderStyle.Render("Ollama Blobs (" + ollamaBlobsDir + ")"))
@@ -75,7 +75,7 @@ func runStatus(ollamaDir, lmstudioDir, skipProvider string, verbose bool) error 
 			ui.PrintBullet("Broken symlinks:  0")
 		}
 		ui.PrintBullet(fmt.Sprintf("Disk space saved: %s", linking.FormatBytes(ollamaStatus.BytesSaved)))
-		if verbose && len(ollamaStatus.Files) > 0 {
+		if o.verbose && len(ollamaStatus.Files) > 0 {
 			for _, f := range ollamaStatus.Files {
 				if f.IsBroken {
 					ui.PrintMuted(fmt.Sprintf("  ✖ %s -> [broken: %s]", f.Name, f.Target))

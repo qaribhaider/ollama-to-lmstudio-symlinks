@@ -14,26 +14,26 @@ import (
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/ui"
 )
 
-func runForward(ollamaDir, lmstudioDir, skipProvider string, dryRun, verbose, useHardlinks, interactive, skipChecks bool) error {
+func runForward(o options) error {
 	ui.PrintHeader("Ollama → LM Studio Linker")
-	ui.PrintInfo(fmt.Sprintf("Ollama directory: %s", ollamaDir))
-	ui.PrintInfo(fmt.Sprintf("Target LM Studio directory: %s", lmstudioDir))
+	ui.PrintInfo(fmt.Sprintf("Ollama directory: %s", o.ollamaDir))
+	ui.PrintInfo(fmt.Sprintf("Target LM Studio directory: %s", o.lmstudioDir))
 
-	if dryRun {
+	if o.dryRun {
 		ui.PrintWarning("DRY RUN MODE - No changes will be made")
 	}
 	ui.PrintEmptyLine()
 
 	// Pre-flight checks
-	if _, err := ollama.ValidateOllama(skipChecks); err != nil {
+	if _, err := ollama.ValidateOllama(o.skipChecks); err != nil {
 		return err
 	}
-	if err := lmstudio.ValidateLMStudio(skipChecks, lmstudioDir); err != nil {
+	if err := lmstudio.ValidateLMStudio(o.skipChecks, o.lmstudioDir); err != nil {
 		return err
 	}
 
 	// Discover models
-	discoveredModels, err := ollama.DiscoverModels(ollamaDir, verbose)
+	discoveredModels, err := ollama.DiscoverModels(o.ollamaDir, o.verbose)
 	if err != nil {
 		return fmt.Errorf("error discovering models: %w", err)
 	}
@@ -42,7 +42,7 @@ func runForward(ollamaDir, lmstudioDir, skipProvider string, dryRun, verbose, us
 		return errors.New("no models found in Ollama directory")
 	}
 
-	if interactive {
+	if o.interactive {
 		var options []huh.Option[string]
 		for _, m := range discoveredModels {
 			options = append(options, huh.NewOption(m.Name, m.Name).Selected(true))
@@ -87,8 +87,8 @@ func runForward(ollamaDir, lmstudioDir, skipProvider string, dryRun, verbose, us
 	}
 
 	// Create ollama provider directory
-	ollamaProviderDir := filepath.Join(lmstudioDir, skipProvider)
-	if !dryRun {
+	ollamaProviderDir := filepath.Join(o.lmstudioDir, o.skipProvider)
+	if !o.dryRun {
 		if err := os.MkdirAll(ollamaProviderDir, 0755); err != nil {
 			return fmt.Errorf("error creating ollama provider directory: %w", err)
 		}
@@ -97,7 +97,7 @@ func runForward(ollamaDir, lmstudioDir, skipProvider string, dryRun, verbose, us
 	// Process each model
 	var created, skipped int
 	for _, model := range discoveredModels {
-		result := linking.ProcessModel(model, ollamaDir, ollamaProviderDir, dryRun, verbose, useHardlinks)
+		result := linking.ProcessModel(model, o.ollamaDir, ollamaProviderDir, o.dryRun, o.verbose, o.useHardlinks)
 		if result {
 			created++
 		} else {
@@ -112,7 +112,7 @@ func runForward(ollamaDir, lmstudioDir, skipProvider string, dryRun, verbose, us
 		fmt.Sprintf("Skipped: %d", skipped),
 	))
 
-	if created > 0 && !dryRun {
+	if created > 0 && !o.dryRun {
 		ui.PrintSuccess("Models are now available in LM Studio under the 'ollama' provider")
 	}
 	return nil

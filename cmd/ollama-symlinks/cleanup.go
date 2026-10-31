@@ -10,12 +10,12 @@ import (
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/ui"
 )
 
-func runCleanup(lmstudioDir, ollamaDir, skipProvider string, dryRun, verbose, skipChecks bool, stdin io.Reader) error {
+func runCleanup(o options, stdin io.Reader) error {
 	var totalBroken []linking.SymlinkInfo
 	var scanLocations []string
 
 	// 1. LM Studio managed directory
-	lmsTargetDir := filepath.Join(lmstudioDir, skipProvider)
+	lmsTargetDir := filepath.Join(o.lmstudioDir, o.skipProvider)
 	if _, err := os.Stat(lmsTargetDir); err == nil {
 		scanLocations = append(scanLocations, lmsTargetDir)
 		ui.PrintSubheader("Scanning for broken symlinks in LM Studio: " + lmsTargetDir)
@@ -28,7 +28,7 @@ func runCleanup(lmstudioDir, ollamaDir, skipProvider string, dryRun, verbose, sk
 	}
 
 	// 2. Ollama blobs directory
-	ollamaBlobsDir := filepath.Join(ollamaDir, "blobs")
+	ollamaBlobsDir := filepath.Join(o.ollamaDir, "blobs")
 	if _, err := os.Stat(ollamaBlobsDir); err == nil {
 		scanLocations = append(scanLocations, ollamaBlobsDir)
 		ui.PrintSubheader("Scanning for broken symlinks in Ollama blobs: " + ollamaBlobsDir)
@@ -56,7 +56,7 @@ func runCleanup(lmstudioDir, ollamaDir, skipProvider string, dryRun, verbose, sk
 	}
 	ui.PrintEmptyLine()
 
-	if dryRun {
+	if o.dryRun {
 		ui.PrintWarning("DRY RUN MODE - No items will be removed.")
 		return nil
 	}
@@ -84,7 +84,7 @@ func runCleanup(lmstudioDir, ollamaDir, skipProvider string, dryRun, verbose, sk
 
 	// Clean up any empty directories in LM Studio
 	if removed > 0 && lmsTargetDir != "" {
-		if verbose {
+		if o.verbose {
 			ui.PrintMuted("Cleaning up empty model directories in LM Studio...")
 		}
 		entries, err := os.ReadDir(lmsTargetDir)
@@ -94,7 +94,7 @@ func runCleanup(lmstudioDir, ollamaDir, skipProvider string, dryRun, verbose, sk
 					dirPath := filepath.Join(lmsTargetDir, entry.Name())
 					if files, err := os.ReadDir(dirPath); err == nil && len(files) == 0 {
 						os.Remove(dirPath)
-						if verbose {
+						if o.verbose {
 							ui.PrintMuted(fmt.Sprintf("Removed empty directory: %s", entry.Name()))
 						}
 					}

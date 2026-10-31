@@ -18,13 +18,13 @@ import (
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/ui"
 )
 
-func runDelete(from, ollamaDir, lmstudioDir, namePrefix, skipProvider string, dryRun, verbose, skipChecks bool, stdin io.Reader) error {
+func runDelete(from string, o options, stdin io.Reader) error {
 	if from == "ollama" {
-		return runDeleteOllama(ollamaDir, namePrefix, dryRun, verbose, skipChecks, stdin)
+		return runDeleteOllama(o, stdin)
 	}
 
-	targetDir := filepath.Join(lmstudioDir, skipProvider)
-	if err := lmstudio.ValidateLMStudio(skipChecks, targetDir); err != nil {
+	targetDir := filepath.Join(o.lmstudioDir, o.skipProvider)
+	if err := lmstudio.ValidateLMStudio(o.skipChecks, targetDir); err != nil {
 		return err
 	}
 	// Check target dir exists
@@ -79,7 +79,7 @@ func runDelete(from, ollamaDir, lmstudioDir, namePrefix, skipProvider string, dr
 		return nil
 	}
 
-	if !dryRun {
+	if !o.dryRun {
 		confirmed, err := askConfirm(fmt.Sprintf("Are you sure you want to delete %d symlinks?", len(toDelete)))
 		if err != nil {
 			return err
@@ -90,7 +90,7 @@ func runDelete(from, ollamaDir, lmstudioDir, namePrefix, skipProvider string, dr
 		}
 	}
 
-	removed, failed := linking.RemoveSymlinks(toDelete, dryRun)
+	removed, failed := linking.RemoveSymlinks(toDelete, o.dryRun)
 	fmt.Println(ui.FormatSummary(
 		ui.HeaderStyle.Render("Results"),
 		fmt.Sprintf("Removed: %d", removed),
@@ -131,26 +131,26 @@ func findOwnedModels(ollamaDir, namePrefix string, allModels []models.ModelInfo)
 	return owned
 }
 
-func runDeleteOllama(ollamaDir, namePrefix string, dryRun, verbose, skipChecks bool, stdin io.Reader) error {
+func runDeleteOllama(o options, stdin io.Reader) error {
 	// Check if Ollama manifests and blobs dirs exist
-	manifestsDir := filepath.Join(ollamaDir, "manifests")
+	manifestsDir := filepath.Join(o.ollamaDir, "manifests")
 	if _, err := os.Stat(manifestsDir); os.IsNotExist(err) {
-		return fmt.Errorf("target directory for deletion does not exist: %s (manifests not found)", ollamaDir)
+		return fmt.Errorf("target directory for deletion does not exist: %s (manifests not found)", o.ollamaDir)
 	}
 
 	// Pre-flight check: validate Ollama CLI
-	ollamaBin, err := ollama.ValidateOllama(skipChecks)
+	ollamaBin, err := ollama.ValidateOllama(o.skipChecks)
 	if err != nil {
 		return err
 	}
 
 	ui.PrintSubheader("Scanning Ollama models for symlinks...")
-	allModels, err := ollama.DiscoverModels(ollamaDir, verbose)
+	allModels, err := ollama.DiscoverModels(o.ollamaDir, o.verbose)
 	if err != nil {
 		return fmt.Errorf("could not discover models: %w", err)
 	}
 
-	symlinkedModels := findOwnedModels(ollamaDir, namePrefix, allModels)
+	symlinkedModels := findOwnedModels(o.ollamaDir, o.namePrefix, allModels)
 
 	if len(symlinkedModels) == 0 {
 		ui.PrintSuccess("No symlinked models found in Ollama")
@@ -163,7 +163,7 @@ func runDeleteOllama(ollamaDir, namePrefix string, dryRun, verbose, skipChecks b
 			continue
 		}
 		blobFilename := strings.Replace(m.MainModelBlobs[0], ":", "-", 1)
-		targetPath, err := linking.SecureJoin(filepath.Join(ollamaDir, "blobs"), blobFilename)
+		targetPath, err := linking.SecureJoin(filepath.Join(o.ollamaDir, "blobs"), blobFilename)
 
 		target := "(unsafe blob path)"
 		if err == nil {
@@ -218,7 +218,7 @@ func runDeleteOllama(ollamaDir, namePrefix string, dryRun, verbose, skipChecks b
 		}
 	}
 
-	if !dryRun {
+	if !o.dryRun {
 		confirmed, err := askConfirm(fmt.Sprintf("Are you sure you want to delete %d models from Ollama?", len(toDelete)))
 		if err != nil {
 			return err
@@ -231,13 +231,13 @@ func runDeleteOllama(ollamaDir, namePrefix string, dryRun, verbose, skipChecks b
 
 	var removed, failed int
 	for _, m := range toDelete {
-		if dryRun {
+		if o.dryRun {
 			ui.PrintMuted(fmt.Sprintf("Would remove: %s", m.Name))
 			removed++
 			continue
 		}
 
-		if verbose {
+		if o.verbose {
 			ui.PrintMuted(fmt.Sprintf("Deleting %s via 'ollama rm'...", m.Name))
 		}
 
