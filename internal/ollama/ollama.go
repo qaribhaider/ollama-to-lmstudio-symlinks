@@ -11,13 +11,12 @@ import (
 	"github.com/qaribhaider/ollama-to-lmstudio-symlinks/internal/models"
 )
 
+var digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
 // ValidateDigest ensures a digest matches the expected format (sha256:64hexchars)
 // to prevent path traversal when constructing blob paths.
 func ValidateDigest(digest string) error {
-	// Pattern matched lazily to avoid init cycles if needed, but safe at package level
-	// Actually we can just define it inside or as a package var.
-	matched, _ := regexp.MatchString(`^sha256:[0-9a-f]{64}$`, digest)
-	if !matched {
+	if !digestPattern.MatchString(digest) {
 		return fmt.Errorf("invalid digest format: %q", digest)
 	}
 	return nil
