@@ -60,7 +60,21 @@ make update-version
 echo "v0.3.1" > VERSION
 ```
 
-After updating the version, commit the changes and push to trigger a new release.
+### Releasing
+
+A release is published when a change to `VERSION` is merged into `main`. Nothing else triggers one.
+
+1. Run `make smoke` if the change touches linking, discovery, delete or cleanup.
+2. Bump `VERSION` (`vX.Y.Z`, higher than the latest release) in the PR. A PR that changes `VERSION` also runs the **Release check** workflow: it validates the version and runs the tests on Linux, macOS and Windows before you can merge.
+3. Merge. The **Build and Release** workflow builds all binaries, writes `checksums.txt`, attests their provenance, and publishes the release with generated notes.
+
+Verify a downloaded binary was built by this repository's workflow:
+
+```bash
+gh attestation verify ollama-symlinks-macos-arm64 --repo qaribhaider/ollama-to-lmstudio-symlinks
+```
+
+**If a release is bad:** the workflow refuses to publish a version whose tag already exists, so you cannot overwrite it. Delete the release on GitHub (the installer uses the latest release, so it falls back to the previous one), fix the problem, and publish the next patch version.
 
 ## 🔧 How It Works
 

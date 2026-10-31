@@ -1,0 +1,50 @@
+name: Release check
+
+# Merging a VERSION change publishes a release, so PRs that change it get extra
+# checks before merge: a valid new version, and the tests on every OS we ship for.
+# Other PRs only run ci.yml (Linux).
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - VERSION
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: VERSION is valid and new
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0 # tags are needed to find the latest release
+
+      - name: Test the version check
+        run: .github/scripts/check-version_test.sh
+
+      - name: Check VERSION
+        run: .github/scripts/check-version.sh VERSION "$(git tag --list 'v*' --sort=-v:refname | sed -n 1p)"
+
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: "1.26"
+          cache-dependency-path: go.sum
+
+      - name: Run Tests
+        run: go test ./...
