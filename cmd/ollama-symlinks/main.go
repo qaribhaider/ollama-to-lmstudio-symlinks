@@ -431,6 +431,38 @@ func runDelete(from, ollamaDir, lmstudioDir, namePrefix, skipProvider string, dr
 	return nil
 }
 
+// findOwnedModels returns the models in allModels that reverse mode registered
+// into Ollama, i.e. the ones it is safe to offer for deletion.
+func findOwnedModels(ollamaDir, namePrefix string, allModels []models.ModelInfo) []models.ModelInfo {
+	var owned []models.ModelInfo
+	for _, m := range allModels {
+		if len(m.MainModelBlobs) == 0 {
+			continue
+		}
+		// Check if the manifest uses a symlinked blob
+		// The blob filename is "sha256-hash" (no colon)
+		blobFilename := strings.Replace(m.MainModelBlobs[0], ":", "-", 1)
+		blobPath := filepath.Join(ollamaDir, "blobs", blobFilename)
+
+		// Both conditions are required: the name alone would match a model the
+		// user pulled themselves, and a link alone would match blobs they
+		// symlinked by hand.
+		if !strings.HasPrefix(m.Name, namePrefix+"-") && !strings.HasPrefix(m.Name, namePrefix+":") {
+			continue
+		}
+
+		info, err := os.Lstat(blobPath)
+		switch {
+		case err == nil && linking.IsManagedLink(info):
+			owned = append(owned, m)
+		case os.IsNotExist(err):
+			// Ghost left behind after the source file was removed.
+			owned = append(owned, m)
+		}
+	}
+	return owned
+}
+
 func runDeleteOllama(ollamaDir, namePrefix string, dryRun, verbose, skipChecks bool, stdin io.Reader) error {
 	// Check if Ollama manifests and blobs dirs exist
 	manifestsDir := filepath.Join(ollamaDir, "manifests")
@@ -451,33 +483,7 @@ func runDeleteOllama(ollamaDir, namePrefix string, dryRun, verbose, skipChecks b
 		return fmt.Errorf("could not discover models: %w", err)
 	}
 
-	var symlinkedModels []models.ModelInfo
-	for _, m := range allModels {
-		if len(m.MainModelBlobs) == 0 {
-			continue
-		}
-		// Check if the manifest uses a symlinked blob
-		// The blob filename is "sha256-hash" (no colon)
-		blobFilename := strings.Replace(m.MainModelBlobs[0], ":", "-", 1)
-		blobPath := filepath.Join(ollamaDir, "blobs", blobFilename)
-
-		info, err := os.Lstat(blobPath)
-		prefix := namePrefix + "-"
-		isOurModel := strings.HasPrefix(m.Name, "lms-") || strings.HasPrefix(m.Name, "lms:") ||
-			(namePrefix != "" && (strings.HasPrefix(m.Name, prefix) || strings.HasPrefix(m.Name, namePrefix+":")))
-
-		if err == nil {
-			if info.Mode()&os.ModeSymlink != 0 {
-				symlinkedModels = append(symlinkedModels, m)
-			} else if info.Mode().IsRegular() && isOurModel {
-				// Regular file but with our prefix - likely a hard link
-				symlinkedModels = append(symlinkedModels, m)
-			}
-		} else if os.IsNotExist(err) && isOurModel {
-			// Also include broken models (ghosts) if they have our prefix
-			symlinkedModels = append(symlinkedModels, m)
-		}
-	}
+	symlinkedModels := findOwnedModels(ollamaDir, namePrefix, allModels)
 
 	if len(symlinkedModels) == 0 {
 		ui.PrintSuccess("No symlinked models found in Ollama")
