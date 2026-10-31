@@ -121,7 +121,7 @@ func findOwnedModels(ollamaDir, namePrefix string, allModels []models.ModelInfo)
 
 		info, err := os.Lstat(blobPath)
 		switch {
-		case err == nil && linking.IsManagedLink(info):
+		case err == nil && linking.IsManagedLink(blobPath, info):
 			owned = append(owned, m)
 		case os.IsNotExist(err):
 			// Ghost left behind after the source file was removed.
