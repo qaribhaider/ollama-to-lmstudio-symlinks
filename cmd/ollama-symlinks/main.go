@@ -367,7 +367,6 @@ func runDelete(from, ollamaDir, lmstudioDir, namePrefix, skipProvider string, dr
 
 	targetDir := filepath.Join(lmstudioDir, skipProvider)
 	if err := lmstudio.ValidateLMStudio(skipChecks, targetDir); err != nil {
-		ui.PrintError(err.Error())
 		return err
 	}
 	// Check target dir exists
@@ -484,7 +483,6 @@ func runDeleteOllama(ollamaDir, namePrefix string, dryRun, verbose, skipChecks b
 	// Pre-flight check: validate Ollama CLI
 	ollamaBin, err := ollama.ValidateOllama(skipChecks)
 	if err != nil {
-		ui.PrintError(err.Error())
 		return err
 	}
 
@@ -624,11 +622,9 @@ func runForward(ollamaDir, lmstudioDir, skipProvider string, dryRun, verbose, us
 
 	// Pre-flight checks
 	if _, err := ollama.ValidateOllama(skipChecks); err != nil {
-		ui.PrintError(err.Error())
 		return err
 	}
 	if err := lmstudio.ValidateLMStudio(skipChecks, lmstudioDir); err != nil {
-		ui.PrintError(err.Error())
 		return err
 	}
 
@@ -639,8 +635,7 @@ func runForward(ollamaDir, lmstudioDir, skipProvider string, dryRun, verbose, us
 	}
 
 	if len(discoveredModels) == 0 {
-		ui.PrintError("No models found in Ollama directory")
-		return nil
+		return errors.New("no models found in Ollama directory")
 	}
 
 	if interactive {
@@ -731,13 +726,11 @@ func runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider string, dryRun,
 	// Pre-flight check: validate Ollama CLI
 	ollamaBin, err := ollama.ValidateOllama(skipChecks)
 	if err != nil {
-		ui.PrintError(err.Error())
 		return err
 	}
 
 	// Pre-flight check: validate LM Studio
 	if err := lmstudio.ValidateLMStudio(skipChecks, lmstudioDir); err != nil {
-		ui.PrintError(err.Error())
 		return err
 	}
 
@@ -748,8 +741,7 @@ func runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider string, dryRun,
 	}
 
 	if len(discoveredModels) == 0 {
-		ui.PrintError("No eligible models found in LM Studio directory")
-		return nil
+		return errors.New("no eligible models found in LM Studio directory")
 	}
 
 	if interactive {
