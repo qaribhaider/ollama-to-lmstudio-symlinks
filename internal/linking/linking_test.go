@@ -178,6 +178,61 @@ func TestProcessModel_Sharded_Idempotency(t *testing.T) {
 	}
 }
 
+func shardedFixture(t *testing.T) (ollamaDir, providerDir string, model models.ModelInfo) {
+	t.Helper()
+	tempDir := t.TempDir()
+	ollamaDir = filepath.Join(tempDir, "ollama")
+	blobsDir := filepath.Join(ollamaDir, "blobs")
+	os.MkdirAll(blobsDir, 0755)
+	os.WriteFile(filepath.Join(blobsDir, "sha256-shard111"), []byte("shard 1"), 0644)
+	os.WriteFile(filepath.Join(blobsDir, "sha256-shard222"), []byte("shard 2"), 0644)
+
+	providerDir = filepath.Join(tempDir, "lmstudio", "ollama")
+	model = models.ModelInfo{
+		Name:           "sharded-model:latest",
+		MainModelBlobs: []string{"sha256:shard111", "sha256:shard222"},
+	}
+	return ollamaDir, providerDir, model
+}
+
+func TestProcessModel_Sharded_CompletesPartiallyLinkedModel(t *testing.T) {
+	ollamaDir, providerDir, model := shardedFixture(t)
+	if !ProcessModel(model, ollamaDir, providerDir, false, false, false) {
+		t.Fatal("initial link failed")
+	}
+
+	// Simulate an interrupted earlier run: shard 2 is missing.
+	modelDir := filepath.Join(providerDir, "sharded-model-latest")
+	shard2 := filepath.Join(modelDir, "sharded-model-latest-00002-of-00002.gguf")
+	if err := os.Remove(shard2); err != nil {
+		t.Fatal(err)
+	}
+
+	if !ProcessModel(model, ollamaDir, providerDir, false, false, false) {
+		t.Error("a partially linked model must be completed, not reported as already existing")
+	}
+	if _, err := os.Lstat(shard2); err != nil {
+		t.Errorf("missing shard link was not recreated: %v", err)
+	}
+}
+
+func TestProcessModel_Sharded_RollsBackWhenLaterShardFails(t *testing.T) {
+	ollamaDir, providerDir, model := shardedFixture(t)
+	// A digest that escapes the blobs directory makes the second shard fail
+	// after the first link has already been created.
+	model.MainModelBlobs[1] = "sha256:/../../../escape"
+
+	if ProcessModel(model, ollamaDir, providerDir, false, false, false) {
+		t.Fatal("expected failure for the unsafe shard digest")
+	}
+
+	modelDir := filepath.Join(providerDir, "sharded-model-latest")
+	shard1 := filepath.Join(modelDir, "sharded-model-latest-00001-of-00002.gguf")
+	if _, err := os.Lstat(shard1); err == nil {
+		t.Error("links created before the failure must be removed so a retry is not skipped")
+	}
+}
+
 func TestProcessLMStudioModelDryRun(t *testing.T) {
 	ollamaDir := t.TempDir()
 
