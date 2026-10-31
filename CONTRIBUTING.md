@@ -18,6 +18,9 @@ make clean
 # Run tests
 make test
 
+# Smoke tests against a real Ollama (manual, not run in CI)
+make smoke
+
 # Show version
 make version
 
