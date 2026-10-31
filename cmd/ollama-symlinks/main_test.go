@@ -13,7 +13,7 @@ import (
 
 func TestRunApp_Validation(t *testing.T) {
 	tempDir := t.TempDir()
-	
+
 	// Create a dummy dir that exists
 	existsDir := filepath.Join(tempDir, "exists")
 	os.Mkdir(existsDir, 0755)
@@ -400,5 +400,3 @@ func TestRunApp_Delete_NamePrefix(t *testing.T) {
 		t.Fatalf("runApp(delete --name-prefix custom-prefix) error = %v", err)
 	}
 }
-
-

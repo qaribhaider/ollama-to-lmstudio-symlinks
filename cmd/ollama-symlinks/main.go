@@ -37,7 +37,7 @@ func runApp(args []string, stdin io.Reader) error {
 	fs.Usage = func() {
 		ui.PrintHeader(fmt.Sprintf("Usage: %s [command] [flags]", fs.Name()))
 		ui.PrintEmptyLine()
-		
+
 		fmt.Println(ui.HeaderStyle.Render("Commands"))
 		fmt.Printf("  %-12s %s\n", "status", "Show active links, broken symlinks, and disk space savings")
 		fmt.Printf("  %-12s %s\n", "delete", "Interactively delete symlinks from Ollama or LM Studio")
@@ -132,7 +132,7 @@ func runApp(args []string, stdin io.Reader) error {
 		deleteFs.Usage = func() {
 			ui.PrintHeader(fmt.Sprintf("Usage: %s %s [flags]", fs.Name(), deleteFs.Name()))
 			ui.PrintEmptyLine()
-			
+
 			fmt.Println(ui.HeaderStyle.Render("Flags"))
 			deleteFs.VisitAll(func(f *flag.Flag) {
 				_, usage := flag.UnquoteUsage(f)
@@ -149,11 +149,11 @@ func runApp(args []string, stdin io.Reader) error {
 		deleteVerbose := deleteFs.Bool("verbose", *verbose, "Enable verbose output")
 		deleteSkipChecks := deleteFs.Bool("skip-checks", *skipChecks, "Skip pre-flight validation checks for Ollama and LM Studio")
 		deleteNamePrefix := deleteFs.String("name-prefix", *namePrefix, "Prefix for models created in Ollama")
-		
+
 		// Re-bind global flags to deleteFs so they can be parsed after the subcommand
 		deleteFs.StringVar(ollamaDir, "ollama-dir", *ollamaDir, "Path to Ollama models directory")
 		deleteFs.StringVar(lmstudioDir, "lmstudio-dir", *lmstudioDir, "Path to LM Studio models directory")
-		
+
 		if err := deleteFs.Parse(remainingArgs[1:]); err != nil {
 			return err
 		}
@@ -181,7 +181,7 @@ func runApp(args []string, stdin io.Reader) error {
 			cleanupFs.Usage = func() {
 				ui.PrintHeader(fmt.Sprintf("Usage: %s %s [flags]", fs.Name(), cleanupFs.Name()))
 				ui.PrintEmptyLine()
-				
+
 				fmt.Println(ui.HeaderStyle.Render("Flags"))
 				cleanupFs.VisitAll(func(f *flag.Flag) {
 					_, usage := flag.UnquoteUsage(f)
@@ -193,24 +193,24 @@ func runApp(args []string, stdin io.Reader) error {
 				})
 				ui.PrintEmptyLine()
 			}
-			
+
 			cleanupDryRun := cleanupFs.Bool("dry-run", *dryRun, "Show what would be deleted without actually removing them")
 			cleanupVerbose := cleanupFs.Bool("verbose", *verbose, "Enable verbose output")
 			cleanupSkipChecks := cleanupFs.Bool("skip-checks", *skipChecks, "Skip pre-flight validation checks for Ollama and LM Studio")
-			
+
 			// Re-bind global flags to cleanupFs so they can be parsed after the subcommand
 			cleanupFs.StringVar(lmstudioDir, "lmstudio-dir", *lmstudioDir, "Path to LM Studio models directory")
 			cleanupFs.StringVar(ollamaDir, "ollama-dir", *ollamaDir, "Path to Ollama models directory")
-			
+
 			if err := cleanupFs.Parse(remainingArgs[1:]); err != nil {
 				return err
 			}
-			
+
 			if len(cleanupFs.Args()) > 0 {
 				cleanupFs.Usage()
 				return fmt.Errorf("unexpected argument: %s", cleanupFs.Args()[0])
 			}
-			
+
 			return runCleanup(*lmstudioDir, *ollamaDir, *cleanupDryRun, *cleanupVerbose, *cleanupSkipChecks, stdin)
 		}
 
@@ -460,12 +460,12 @@ func runDeleteOllama(ollamaDir, namePrefix string, dryRun, verbose, skipChecks b
 		// The blob filename is "sha256-hash" (no colon)
 		blobFilename := strings.Replace(m.MainModelBlobs[0], ":", "-", 1)
 		blobPath := filepath.Join(ollamaDir, "blobs", blobFilename)
-		
+
 		info, err := os.Lstat(blobPath)
 		prefix := namePrefix + "-"
 		isOurModel := strings.HasPrefix(m.Name, "lms-") || strings.HasPrefix(m.Name, "lms:") ||
 			(namePrefix != "" && (strings.HasPrefix(m.Name, prefix) || strings.HasPrefix(m.Name, namePrefix+":")))
-		
+
 		if err == nil {
 			if info.Mode()&os.ModeSymlink != 0 {
 				symlinkedModels = append(symlinkedModels, m)
@@ -491,7 +491,7 @@ func runDeleteOllama(ollamaDir, namePrefix string, dryRun, verbose, skipChecks b
 		}
 		blobFilename := strings.Replace(m.MainModelBlobs[0], ":", "-", 1)
 		targetPath, err := linking.SecureJoin(filepath.Join(ollamaDir, "blobs"), blobFilename)
-		
+
 		target := "(unsafe blob path)"
 		if err == nil {
 			if readTarget, err := os.Readlink(targetPath); err == nil {
@@ -571,7 +571,7 @@ func runDeleteOllama(ollamaDir, namePrefix string, dryRun, verbose, skipChecks b
 		if verbose {
 			ui.PrintMuted(fmt.Sprintf("Deleting %s via 'ollama rm'...", m.Name))
 		}
-		
+
 		// Use 'ollama rm' to properly clean up manifest and blob links
 		importPath := m.Name
 		// Validate model name to prevent accidental flag interpretation
@@ -580,7 +580,7 @@ func runDeleteOllama(ollamaDir, namePrefix string, dryRun, verbose, skipChecks b
 			failed++
 			continue
 		}
-		
+
 		cmd := exec.Command(ollamaBin, "rm", importPath)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
@@ -699,7 +699,7 @@ func runForward(ollamaDir, lmstudioDir string, dryRun, verbose, useHardlinks, in
 		fmt.Sprintf("Linked:  %d", created),
 		fmt.Sprintf("Skipped: %d", skipped),
 	))
-	
+
 	if created > 0 && !dryRun {
 		ui.PrintSuccess("Models are now available in LM Studio under the 'ollama' provider")
 	}
@@ -812,7 +812,7 @@ func runReverse(lmstudioDir, ollamaDir, namePrefix, skipProvider string, dryRun,
 		fmt.Sprintf("Linked:  %d", created),
 		fmt.Sprintf("Skipped: %d", skipped),
 	))
-	
+
 	if created > 0 && !dryRun {
 		ui.PrintSuccess(fmt.Sprintf("Models are now available in Ollama with the '%s-' prefix", namePrefix))
 	}

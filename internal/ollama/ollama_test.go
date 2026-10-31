@@ -38,7 +38,7 @@ func TestGetDefaultDirs(t *testing.T) {
 
 func TestGetOllamaCandidates(t *testing.T) {
 	tempDir := t.TempDir()
-	
+
 	// Create mock directories
 	path1 := filepath.Join(tempDir, "opt1")
 	path2 := filepath.Join(tempDir, "opt2")
@@ -50,7 +50,7 @@ func TestGetOllamaCandidates(t *testing.T) {
 	defer os.Unsetenv("OLLAMA_MODELS")
 
 	candidates := GetOllamaCandidates()
-	
+
 	foundPath1 := false
 	for _, c := range candidates {
 		if c == path1 {
@@ -161,7 +161,7 @@ func TestDiscoverModelsResilience(t *testing.T) {
 	mlxModelName := "mlx-model"
 	mlxModelDir := filepath.Join(manifestsDir, "registry.ollama.ai", "library", mlxModelName)
 	os.MkdirAll(mlxModelDir, 0755)
-	
+
 	mlxManifest := models.OllamaManifest{}
 	mlxManifest.Layers = []struct {
 		MediaType string `json:"mediaType"`
@@ -180,7 +180,7 @@ func TestDiscoverModelsResilience(t *testing.T) {
 	invalidModelName := "invalid-model"
 	invalidModelDir := filepath.Join(manifestsDir, "registry.ollama.ai", "library", invalidModelName)
 	os.MkdirAll(invalidModelDir, 0755)
-	
+
 	invalidManifest := models.OllamaManifest{}
 	invalidManifest.Layers = []struct {
 		MediaType string `json:"mediaType"`
@@ -255,10 +255,10 @@ func TestDiscoverModels_NamespacesAndRegistries(t *testing.T) {
 	}
 
 	expectedMap := map[string]bool{
-		"llama3:latest":                              true,
-		"myuser/custommodel:v1":                      true,
+		"llama3:latest":         true,
+		"myuser/custommodel:v1": true,
 		"hf.co/bartowski/Llama-3.2-3B-Instruct-GGUF:latest": true,
-		"directmodel:latest":                         true,
+		"directmodel:latest": true,
 	}
 
 	if len(discovered) != len(expectedMap) {
