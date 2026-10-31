@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - main
+    # A release is published for the version in VERSION, so only a bump should
+    # trigger one; other merges would rebuild and overwrite the existing release.
+    paths:
+      - VERSION
 
 permissions:
   contents: write
@@ -45,9 +49,12 @@ jobs:
 
       - name: Build for Windows
         if: matrix.os == 'windows-latest'
+        shell: pwsh
         run: |
           $version = Get-Content -Path VERSION
           $env:VERSION = $version
+          $env:GOOS = "windows"
+          $env:GOARCH = "${{ matrix.arch }}"
           go build -ldflags="-X 'main.Version=$env:VERSION'" -o ollama-symlinks-windows-${{ matrix.arch }}.exe ./cmd/ollama-symlinks
           echo "ollama-symlinks-windows-${{ matrix.arch }}=$env:VERSION" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
@@ -77,7 +84,14 @@ jobs:
 
       - name: Read VERSION file
         id: version
-        run: echo "VERSION=$(cat VERSION)" >> $GITHUB_OUTPUT
+        run: echo "VERSION=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Fail if the release tag already exists
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/${{ steps.version.outputs.VERSION }}" >/dev/null; then
+            echo "::error::Tag ${{ steps.version.outputs.VERSION }} already exists. Bump VERSION to publish a new release."
+            exit 1
+          fi
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
